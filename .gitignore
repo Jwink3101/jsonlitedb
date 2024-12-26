@@ -1,0 +1,4 @@
+.coverage
+build/
+dist/
+jsonlitedb.egg-info/

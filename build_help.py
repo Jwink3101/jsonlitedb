@@ -1,0 +1,114 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import shutil
+import subprocess
+import sys
+
+import nbformat
+from nbconvert import MarkdownExporter
+from nbconvert.preprocessors import ExecutePreprocessor
+
+import jsonlitedb
+
+md = ["<!--- Auto Generated -->", "<!--- DO NOT MODIFY. WILL NOT BE SAVED -->"]
+
+
+def run_replace_convert(file):
+    # Load the Jupyter notebook
+    with open(file, "r") as fp:
+        nb = nbformat.read(fp, as_version=4)
+
+    # Execute
+    executer = ExecutePreprocessor(timeout=600, kernel_name="python")
+    executer.preprocess(nb, {"metadata": {"path": "./"}})
+
+    # clean
+    for cell in nb.cells:
+        nb.metadata.pop("signature", None)
+        #         if 'execution_count' in cell:
+        #            cell['execution_count'] = None
+        #
+        #         if 'outputs' in cell and 'execution_count' in cell['outputs']:
+        #             cell['outputs']['execution_count'] = None
+
+        # if 'prompt_number' in cell:
+        #    cell['prompt_number'] = None
+
+        if "metadata" in cell:
+            cell["metadata"].pop("execution", None)
+
+    # Save the executed notebook in place
+    with open(file + ".swp", "w") as fp:
+        nbformat.write(nb, fp)
+    shutil.move(file + ".swp", file)
+
+    # Create a Markdown exporter
+    exporter = MarkdownExporter()
+
+    # Convert the notebook to Markdown
+    body, resources = exporter.from_notebook_node(nb)
+
+    # This is also a hack since I can't seem to get the exporter to properly use
+    # a custom template. I will fix this eventually
+    out = []
+    body = iter(body.splitlines())
+    for line in body:
+        out.append(line)
+        if line.startswith("```python"):
+            for line in body:
+                if line.startswith("```"):
+                    out.append(line)
+                    break
+                else:
+                    out.append(">>> " + line)
+    body = "\n".join(out)
+
+    return body
+
+
+run_replace_convert("Advanced Usage.ipynb")
+body = run_replace_convert("Basic Usage.ipynb")
+
+md.append(body)
+
+with open("readme.md", "r") as rmin, open(".readme.md.swp", "wt") as rmout:
+    for line in rmin:
+        rmout.write(line)
+
+        if not line.startswith("<!--- BEGIN AUTO GENERATED -->"):
+            continue
+
+        rmout.write("\n".join(md))
+
+        for line in rmin:  # keep reading until we get our line. This is older stuff
+            if not line.startswith("<!--- END AUTO GENERATED -->"):
+                continue
+            rmout.write("\n<!--- END AUTO GENERATED -->\n")
+            break
+        else:
+            raise ValueError("Did not find end sentinel")
+shutil.move(".readme.md.swp", "readme.md")
+
+### Documentation for the objects
+
+api = []
+api += ["# API Documentation"]
+api += ["Auto-generated documentation"]
+
+api += ["## JSONLiteDB"]
+doc = subprocess.check_output(
+    [sys.executable, "-m", "pydoc", "jsonlitedb.JSONLiteDB"]
+).decode()
+api.append("```text\n" + doc + "```")
+
+api += ["## Query"]
+doc = subprocess.check_output(
+    [sys.executable, "-m", "pydoc", "jsonlitedb.Query"]
+).decode()
+api.append("```text\n" + doc + "```")
+
+
+with open(".api.md.swp", "wt") as fp:
+    fp.write("\n\n".join(api))
+shutil.move(".api.md.swp", "api.md")
