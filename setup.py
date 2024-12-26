@@ -23,7 +23,7 @@ setup(
     version=get_version(),
     author="Justin Winokur",
     author_email="Jwink3101@users.noreply.github.com",
-    description="A lightweight JSON-based database module",
+    description="SQLite3-backed JSON document database with support for indices and advanced queries",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/Jwink3101/jsonlitedb",
