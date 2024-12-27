@@ -2,6 +2,8 @@
 
 SQLite3-backed JSON document database with support for indices and advanced queries.
 
+<!-- ![logo](logo.svg) -->
+
 ![100% Coverage][100%]
 
 ## Premise and Inspiration

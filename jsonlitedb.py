@@ -19,7 +19,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = ["JSONLiteDB", "JSONLiteDBKeyValue", "Q", "Query", "sqlite_quote", "Row"]
 
@@ -833,10 +833,6 @@ def regexp(pattern, string):
     return bool(re.search(pattern, string))
 
 
-class MissingAttributeError(ValueError):
-    pass
-
-
 class MissingValueError(ValueError):
     pass
 
@@ -906,8 +902,6 @@ class Query:
                 "Cannot compare queries. For example, change "
                 '"4 <= db.Q.val <= 5" to "(4 <= db.Q.val) & (db.Q.val <= 5)"'
             )
-        if not self._key:
-            raise MissingAttributeError("Must assign an attribute first")
 
         r = query_args({tuple(self._key): val})  # Will just return one item
         k, v = list(r.items())[0]
@@ -938,9 +932,6 @@ class Query:
 
     ## Logic
     def _logic(self, other, *, comb):
-        if not other._key or not self._key:
-            raise MissingAttributeError("Must assign an attribute first to both")
-
         if not self._query or not other._query:
             raise MissingValueError("Must set an (in)equality before logic")
 
@@ -952,8 +943,6 @@ class Query:
     __or__ = partialmethod(_logic, comb="OR")
 
     def __invert__(self):
-        if not self._key:
-            raise MissingAttributeError("Must assign an attribute first")
         self._query = f"( NOT {self._query} )"
         return self
 

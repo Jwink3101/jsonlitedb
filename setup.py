@@ -28,14 +28,12 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/Jwink3101/jsonlitedb",
     packages=find_packages(),
-    py_modules=["jsonlitedb"],  # This is the name of your single-file module
+    py_modules=["jsonlitedb"],
     classifiers=[
         "Programming Language :: Python :: 3",
-        "License :: OSI Approved :: MIT License",  # Choose your license
+        "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
     python_requires=">=3.8",  # Specify the Python version compatibility
-    install_requires=[
-        # List your module's dependencies here, if any
-    ],
+    install_requires=[],
 )

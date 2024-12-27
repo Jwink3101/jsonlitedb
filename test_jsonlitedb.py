@@ -15,7 +15,6 @@ from jsonlitedb import (
     AssignedQueryError,
     DissallowedError,
     JSONLiteDB,
-    MissingAttributeError,
     MissingRowIDError,
     MissingValueError,
     Q,
@@ -579,9 +578,6 @@ def test_Query():
     assert (Query() + "a" + 1 + 3)._key == ["a", 1, 3]
 
     # Errors
-    with pytest.raises(MissingAttributeError):
-        Query() < 10
-
     with pytest.raises(DissallowedError):
         Query().q = 100
 
@@ -677,11 +673,8 @@ def test_Query():
 
     (Query().key == 1) | (Query().key == 2)  # No error
 
-    with pytest.raises(MissingAttributeError):
+    with pytest.raises(MissingValueError):
         Query() | Query()
-
-    with pytest.raises(MissingAttributeError):
-        ~Query()
 
 
 def test_query_args():
@@ -929,7 +922,7 @@ def test_non_dicts():
     db.add("hi")
 
     with pytest.raises(sqlite3.IntegrityError):
-        db.create_index(tuple(), unique=True)
+        db.create_index(db.Q, unique=True)
     db.delete_by_rowid(4)
     db.create_index(tuple(), unique=True)
 
@@ -939,8 +932,6 @@ def test_non_dicts():
         "ix_items_c3e97dd6_UNIQUE": ["$"],
         "ix_items_ef1046ca": ["$[1]"],
     }
-
-    # Note, there are no queries on items like "hi" since they are their own value
 
 
 class MockArgv:
