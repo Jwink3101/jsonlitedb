@@ -20,6 +20,18 @@ Similar tools and inspiration:
 
 - [DictTable](https://github.com/Jwink3101/dicttable) (also written by me) is nice but entirely in-memory and not always efficient for non-equality queries.
 
+## Install
+
+From PyPI:
+
+    $ pip install jsonlitedb
+    $ pip install jsonlitedb --upgrade
+    
+Or directly from Github
+
+    $ pip install git+https://github.com/Jwink3101/jsonlitedb.git
+
+
 <!--- BEGIN AUTO GENERATED -->  
 <!--- Auto Generated -->
 <!--- DO NOT MODIFY. WILL NOT BE SAVED -->
