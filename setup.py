@@ -23,7 +23,10 @@ setup(
     version=get_version(),
     author="Justin Winokur",
     author_email="Jwink3101@users.noreply.github.com",
-    description="SQLite3-backed JSON document database with support for indices and advanced queries",
+    description=(
+        "SQLite3-backed JSON document database with "
+        "support for indices and advanced queries"
+    ),
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/Jwink3101/jsonlitedb",
@@ -36,4 +39,9 @@ setup(
     ],
     python_requires=">=3.8",  # Specify the Python version compatibility
     install_requires=[],
+    entry_points={
+        "console_scripts": [
+            "jsonlitedb=jsonlitedb:cli",  # Expose the CLI
+        ],
+    },
 )

@@ -558,6 +558,40 @@ def test_JSONLiteDB_query_results():
     )
 
 
+def test_JSONLiteDB_patch():
+    """
+    Main tests. Note that these try to set different tables to verify that everything
+    works for them too
+    """
+    db = JSONLiteDB(":memory:", table="mytable")
+
+    assert str(db) == "JSONLiteDB(':memory:', table='mytable')"
+
+    items = [
+        {"first": "John", "last": "Lennon", "born": 1940, "role": "guitar"},
+        {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
+        {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
+        {"first": "Ringo", "last": "Starr", "born": 1940, "role": "drums"},
+        {"first": "George", "last": "Martin", "born": 1926, "role": "producer"},
+    ]
+    db.insertmany(items)
+
+    db.patch(
+        {
+            "first": "Richard",
+            "last": "Starkey",
+            "status": "active",  # This is a new field
+            "role": None,  # This will be removed.
+        },
+        (db.Q.last == "Starr"),
+    )
+
+    assert db.path_counts().get("status", -1) == 1  # Was added
+    assert db.path_counts().get("role", -1) == 4  # Was removed
+    assert db.count(first="Ringo") == 0
+    assert db.count(first="Richard") == 1
+
+
 def test_Query():
     import pytest
 
@@ -1051,11 +1085,8 @@ def test_cli():
             cli()
 
     finally:
-        Path(dbpath).unlink(missing_ok=False)
-        Path(file1).unlink(missing_ok=False)
-        Path(file2).unlink(missing_ok=False)
-        Path(dump).unlink(missing_ok=False)
-        Path(dump2).unlink(missing_ok=False)
+        for item in Path(".").glob("!!!*"):
+            item.unlink()
 
 
 if __name__ == "__main__":  # pragma: no cover
@@ -1065,6 +1096,7 @@ if __name__ == "__main__":  # pragma: no cover
     #     test_JSONLiteDB_unicode()
     #     test_JSONLiteDB_updates()
     #     test_JSONLiteDB_query_results()
+    #     test_JSONLiteDB_patch()
     #     test_Query()
     #     test_query_args()
     #     test_build_index_paths()
@@ -1075,7 +1107,7 @@ if __name__ == "__main__":  # pragma: no cover
     #     test_group_ints_with_preceeding_string()
     #     test_sqlite_quote()
     #     test_split_no_double_quotes()
-    test_non_dicts()
+    #     test_non_dicts()
     #     test_cli()
 
     print("!" * 50)
