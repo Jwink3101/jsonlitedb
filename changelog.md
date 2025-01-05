@@ -2,6 +2,12 @@
 
 Newest on top
 
+## 0.1.3 (2025-01-05)
+
+- WAL mode is now optional but on by default. Adds a wal_checkpoint() method and and calls it by default on close.
+
+**1.0 release candidate**
+
 ## 0.1.2 (2025-01-05)
 
 - Adds `patch()` based on SQLite's `JSON_PATCH` ([docs](https://www.sqlite.org/json1.html#jpatch)) to update entries quickly and efficiently without loading into Python.

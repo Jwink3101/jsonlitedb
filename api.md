@@ -8,7 +8,7 @@ Auto-generated documentation
 Help on class JSONLiteDB in jsonlitedb:
 
 jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
- |  jsonlitedb.JSONLiteDB(dbpath, table='items', **sqlitekws)
+ |  jsonlitedb.JSONLiteDB(dbpath, wal_mode=True, table='items', **sqlitekws)
  |
  |  JSON(Lines) SQLite Database. Simple SQLite3 backed JSON-based document database
  |  with powerful queries and indexing.
@@ -19,6 +19,8 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |  -----------
  |  dbpath : str
  |      Path to the SQLite database file. Use ':memory:' for an in-memory database.
+ |  wal_mode : bool, optional
+ |      Whether to use write-ahead-logging (WAL) mode.
  |  table : str, optional
  |      Name of the database table to use. Defaults to 'items'.
  |  **sqlitekws : keyword arguments
@@ -29,12 +31,12 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |  -------
  |  sqlite3.Error
  |      If there is an error connecting to the database.
+ |
  |  Examples:
  |  ---------
  |  >>> db = JSONLiteDB(':memory:')
  |  >>> db = JSONLiteDB('my/database.db',table='Beatles')
  |  >>> db = JSONLiteDB('data.db',check_same_thread=False)
- |
  |
  |  References:
  |  -----------
@@ -56,7 +58,7 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |  __call__ = query(self, *query_args, **query_kwargs)
  |
- |  __del__ = close(self)
+ |  __del__ = close(self, wal_checkpoint=True)
  |
  |  __delitem__(self, rowid)
  |
@@ -69,7 +71,7 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |  __getitem__(self, rowid)
  |
- |  __init__(self, /, dbpath, table='items', **sqlitekws)
+ |  __init__(self, /, dbpath, wal_mode=True, table='items', **sqlitekws)
  |      Initialize self.  See help(type(self)) for accurate signature.
  |
  |  __iter__ = items(self, _load=True)
@@ -135,11 +137,16 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      This example calculates the average of the 'value' field across all items.
  |
- |  close(self)
+ |  close(self, wal_checkpoint=True)
  |      Close the database connection.
  |
  |      This method should be called when the database is no longer needed to
  |      ensure that all resources are properly released.
+ |
+ |      Parameters:
+ |      -----------
+ |      wal_checkpoint : bool, optional
+ |          Whether to call wal_checkpoint() on close. Defaults to True.
  |
  |      Returns:
  |      --------
@@ -269,6 +276,28 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      This example creates an index on the 'first' and 'last' field, then drops it
  |      using its name.
+ |
+ |  execute(self, *args, **kwargs)
+ |      Execute a SQL statement against the UNDERLYING sqlite3 database.
+ |
+ |      This method is a wrapper around the `execute` method of the SQLite database
+ |      connection, allowing you to run SQL statements directly on the database.
+ |
+ |      Parameters:
+ |      -----------
+ |      *args : tuple
+ |          Positional arguments that specify the SQL command and any parameters
+ |          to be used in the execution of the command.
+ |
+ |      **kwargs : dict
+ |          Keyword arguments that can be used to pass additional options for the
+ |          execution of the SQL command.
+ |
+ |      Returns:
+ |      --------
+ |      sqlite3.Cursor
+ |          A cursor object that can be used to iterate over the results of the
+ |          SQL query, if applicable.
  |
  |  get_by_rowid(self, rowid, *, _load=True)
  |      Retrieve an item from the database by its rowid.
@@ -723,6 +752,13 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      Examples:
  |      ---------
  |      >>> db.update({'first': 'George', 'last': 'Harrison', 'birthdate': 1943}, rowid=1)
+ |
+ |  wal_checkpoint(self)
+ |      Execute a write-ahead-log checkpoint
+ |
+ |      Returns:
+ |      --------
+ |      None
  |
  |  ----------------------------------------------------------------------
  |  Class methods defined here:

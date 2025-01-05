@@ -18,6 +18,9 @@ Similar tools and inspiration:
 
 - [Dataset](https://github.com/pudo/dataset) is promising but creates new columns for every key and is very "heavy" with its dependencies. As far as I can tell, there is no native way to support multi-column and/or unique indexes. But still, a very promising tool!
 
+- [KenobiDB](https://github.com/patx/kenobi). Came out while JSONLiteDB was in development. Similar idea with different design decisions. Does not directly support advanced queries indexes (which can *greatly* accelerate queries!). 
+    - Please correct me if I am wrong. I new to this tool.
+
 - [DictTable](https://github.com/Jwink3101/dicttable) (also written by me) is nice but entirely in-memory and not always efficient for non-equality queries.
 
 ## Install

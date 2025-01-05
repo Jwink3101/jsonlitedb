@@ -2,3 +2,6 @@
 build/
 dist/
 jsonlitedb.egg-info/
+*.db
+*.db-wal
+*.db-shm

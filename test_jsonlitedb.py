@@ -245,6 +245,20 @@ def test_JSONLiteDB_general():
     assert list(db) == list(db.query())
     assert len(list(db)) == 5
 
+    # Directly execute
+    assert (
+        db.execute(
+            """
+            SELECT
+                data ->> '$.first' as FiRsT
+            FROM mytable
+            WHERE
+                JSON_EXTRACT(data,'$.last') == 'Lennon'
+            """
+        ).fetchone()["FiRsT"]
+        == "John"
+    )
+
 
 def test_JSONLiteDB_file():
     ##########################################################
@@ -1090,7 +1104,7 @@ def test_cli():
 
 
 if __name__ == "__main__":  # pragma: no cover
-    #     test_JSONLiteDB_general()
+    test_JSONLiteDB_general()
     #     test_JSONLiteDB_file()
     #     test_JSONLiteDB_adv()
     #     test_JSONLiteDB_unicode()

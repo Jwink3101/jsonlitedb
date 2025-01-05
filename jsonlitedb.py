@@ -19,7 +19,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = ["JSONLiteDB", "Q", "Query", "sqlite_quote", "Row"]
 
@@ -40,6 +40,8 @@ class JSONLiteDB:
     -----------
     dbpath : str
         Path to the SQLite database file. Use ':memory:' for an in-memory database.
+    wal_mode : bool, optional
+        Whether to use write-ahead-logging (WAL) mode.
     table : str, optional
         Name of the database table to use. Defaults to 'items'.
     **sqlitekws : keyword arguments
@@ -50,12 +52,12 @@ class JSONLiteDB:
     -------
     sqlite3.Error
         If there is an error connecting to the database.
+
     Examples:
     ---------
     >>> db = JSONLiteDB(':memory:')
     >>> db = JSONLiteDB('my/database.db',table='Beatles')
     >>> db = JSONLiteDB('data.db',check_same_thread=False)
-
 
     References:
     -----------
@@ -67,6 +69,7 @@ class JSONLiteDB:
         self,
         /,
         dbpath,
+        wal_mode=True,
         table=DEFAULT_TABLE,
         **sqlitekws,
     ):
@@ -83,7 +86,7 @@ class JSONLiteDB:
 
         self.context_count = 0
 
-        self._init()
+        self._init(wal_mode=wal_mode)
 
     @classmethod
     def connect(cls, *args, **kwargs):
@@ -1074,7 +1077,7 @@ class JSONLiteDB:
 
     indices = indexes
 
-    def _init(self):
+    def _init(self, wal_mode=True):
         db = self.db
         try:
             with db:
@@ -1120,11 +1123,12 @@ class JSONLiteDB:
                 ("version", __version__),
             )
 
-        try:
-            with self:
-                db.execute("PRAGMA journal_mode = wal")
-        except sqlite3.OperationalError:  # pragma: no cover
-            pass
+        if wal_mode:
+            try:
+                with self:
+                    db.execute("PRAGMA journal_mode = wal")
+            except sqlite3.OperationalError:  # pragma: no cover
+                pass
 
     @staticmethod
     def _combine_queries(*args, **kwargs):
@@ -1198,12 +1202,17 @@ class JSONLiteDB:
         res = self.db.execute(f"SELECT COUNT(rowid) FROM {self.table}").fetchone()
         return res[0]
 
-    def close(self):
+    def close(self, wal_checkpoint=True):
         """
         Close the database connection.
 
         This method should be called when the database is no longer needed to
         ensure that all resources are properly released.
+
+        Parameters:
+        -----------
+        wal_checkpoint : bool, optional
+            Whether to call wal_checkpoint() on close. Defaults to True.
 
         Returns:
         --------
@@ -1217,7 +1226,49 @@ class JSONLiteDB:
         This example demonstrates closing the database connection when done.
         """
         logger.debug("close")
+        if wal_checkpoint:
+            self.wal_checkpoint()
         self.db.close()
+
+    def wal_checkpoint(self):
+        """
+        Execute a write-ahead-log checkpoint
+
+        Returns:
+        --------
+        None
+        """
+        try:
+            with self:
+                self.db.execute("PRAGMA wal_checkpoint;")
+        except sqlite3.DatabaseError:  # pragma: no cover
+            pass
+
+    def execute(self, *args, **kwargs):
+        """
+        Execute a SQL statement against the UNDERLYING sqlite3 database.
+
+        This method is a wrapper around the `execute` method of the SQLite database
+        connection, allowing you to run SQL statements directly on the database.
+
+        Parameters:
+        -----------
+        *args : tuple
+            Positional arguments that specify the SQL command and any parameters
+            to be used in the execution of the command.
+
+        **kwargs : dict
+            Keyword arguments that can be used to pass additional options for the
+            execution of the SQL command.
+
+        Returns:
+        --------
+        sqlite3.Cursor
+            A cursor object that can be used to iterate over the results of the
+            SQL query, if applicable.
+
+        """
+        return self.db.execute(*args, **kwargs)
 
     __del__ = close
 
