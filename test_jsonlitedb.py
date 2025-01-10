@@ -259,6 +259,15 @@ def test_JSONLiteDB_general():
         == "John"
     )
 
+    # Purge
+    assert len(db) > 0  # baseline
+    db.purge()
+    assert len(db) == 0
+
+    with pytest.raises(ValueError):
+        db.wal_checkpoint(mode="NOT VALID")
+    db.wal_checkpoint(mode="TRUNCATE")
+
 
 def test_JSONLiteDB_file():
     ##########################################################
@@ -450,6 +459,9 @@ def test_JSONLiteDB_adv():
             "phone": {"home": "505.555.3101"},
         },
     ]
+
+    # No path means empty
+    assert list(db.query_by_path_exists(None)) == []
 
 
 def test_JSONLiteDB_unicode():
@@ -729,22 +741,22 @@ def test_query_args():
     import pytest
 
     with pytest.raises(ValueError):
-        jsonlitedb.query_args({frozenset(("key", "subkey", 3)): "val"})
+        jsonlitedb._query_tuple2jsonpath({frozenset(("key", "subkey", 3)): "val"})
 
     assert (
-        jsonlitedb.query_args(key="val")
-        == jsonlitedb.query_args({"key": "val"})
+        jsonlitedb._query_tuple2jsonpath(key="val")
+        == jsonlitedb._query_tuple2jsonpath({"key": "val"})
         == {'$."key"': "val"}
     )
     assert (
-        jsonlitedb.query_args({1: "val"})
-        == jsonlitedb.query_args({(1,): "val"})
+        jsonlitedb._query_tuple2jsonpath({1: "val"})
+        == jsonlitedb._query_tuple2jsonpath({(1,): "val"})
         == {"$[1]": "val"}
     )  # Include first of a tuple
-    assert jsonlitedb.query_args({("key", "subkey"): "val"}) == {
+    assert jsonlitedb._query_tuple2jsonpath({("key", "subkey"): "val"}) == {
         '$."key"."subkey"': "val"
     }  # Notice it's quoted
-    assert jsonlitedb.query_args(
+    assert jsonlitedb._query_tuple2jsonpath(
         {
             ("key",): "val",
             ("key", 1): "val",
@@ -767,7 +779,7 @@ def test_query_args():
     }
 
     # non-dicts
-    assert jsonlitedb.query_args("key", '$."key"', ("key", "subkey")) == {
+    assert jsonlitedb._query_tuple2jsonpath("key", '$."key"', ("key", "subkey")) == {
         '$."key"': None,
         '$."key"."subkey"': None,
     }
@@ -797,24 +809,29 @@ def test_build_index_paths():
         jsonlitedb.build_index_paths({"key": "val"})
 
 
-def test_query_construct():
-    assert (
-        str(JSONLiteDB._combine_queries(key="val"))
-        == "Query(( JSON_EXTRACT(data, '$.\"key\"') = 'val' ))"
+def test_query2sql():
+    assert JSONLiteDB._query2sql(key="val") == (
+        "( JSON_EXTRACT(data, '$.\"key\"') = ? )",
+        ["val"],
     )
 
-    qobj = JSONLiteDB._combine_queries(
+    qstr, qvals = JSONLiteDB._query2sql(
         (Query().val3 == "val3"),
         ((Query().val4 == "val4") | (Query().val4 == "otherval4")),
         val1="val1",
         val2="val2",
     )
-    assert str(qobj) == (
-        "Query(( ( ( ( JSON_EXTRACT(data, '$.\"val1\"') = 'val1' ) "
-        "AND ( JSON_EXTRACT(data, '$.\"val2\"') = 'val2' ) ) "
-        "AND ( JSON_EXTRACT(data, '$.\"val3\"') = 'val3' ) ) "
-        "AND ( ( JSON_EXTRACT(data, '$.\"val4\"') = 'val4' ) OR ( JSON_EXTRACT(data, '$.\"val4\"') = 'otherval4' ) ) ))"
+
+    assert qstr == (
+        """( ( ( ( """
+        """JSON_EXTRACT(data, '$."val1"') = ? ) """
+        """AND ( JSON_EXTRACT(data, '$."val2"') = ? ) ) """
+        """AND ( JSON_EXTRACT(data, '$."val3"') = ? ) ) """
+        """AND ( ( JSON_EXTRACT(data, '$."val4"') = ? ) """
+        """OR ( JSON_EXTRACT(data, '$."val4"') = ? """
+        """) ) )"""
     )
+    assert qvals == ["val1", "val2", "val3", "val4", "otherval4"]
 
 
 def test_split_query():
@@ -1114,7 +1131,7 @@ if __name__ == "__main__":  # pragma: no cover
     #     test_Query()
     #     test_query_args()
     #     test_build_index_paths()
-    #     test_query_construct()
+    #     test_query2sql()
     #     test_split_query()
     #     test_Row()
     #     test_listify()

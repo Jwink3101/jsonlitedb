@@ -19,10 +19,14 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |  -----------
  |  dbpath : str
  |      Path to the SQLite database file. Use ':memory:' for an in-memory database.
+ |
  |  wal_mode : bool, optional
- |      Whether to use write-ahead-logging (WAL) mode.
+ |      Whether to use write-ahead-logging (WAL) mode. Defaults to True.
+ |      ADVANCED: Can also set this directly with the execute() method as needed.
+ |
  |  table : str, optional
  |      Name of the database table to use. Defaults to 'items'.
+ |
  |  **sqlitekws : keyword arguments
  |      Additional keyword arguments passed to sqlite3.connect. See [1] for
  |      more details.
@@ -58,7 +62,7 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |  __call__ = query(self, *query_args, **query_kwargs)
  |
- |  __del__ = close(self, wal_checkpoint=True)
+ |  __del__ = close(self)
  |
  |  __delitem__(self, rowid)
  |
@@ -92,8 +96,6 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      >>> print(len(db))
  |      2
  |
- |      This example shows how to use `len()` to get the count of items in the database.
- |
  |  __repr__(self)
  |      Return repr(self).
  |
@@ -125,6 +127,9 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      Examples:
  |      ---------
+ |      The following example calculates the average of the 'value' field across
+ |      all items.
+ |
  |      >>> db = JSONLiteDB(':memory:')
  |      >>> db.insertmany([{'value': 10}, {'value': 20}, {'value': 30}])
  |      >>> avg_value = db.aggregate('value', 'AVG')
@@ -135,18 +140,11 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      >>> db.AVG('value') # 20.0 Same as above
  |
- |      This example calculates the average of the 'value' field across all items.
- |
- |  close(self, wal_checkpoint=True)
+ |  close(self)
  |      Close the database connection.
  |
  |      This method should be called when the database is no longer needed to
  |      ensure that all resources are properly released.
- |
- |      Parameters:
- |      -----------
- |      wal_checkpoint : bool, optional
- |          Whether to call wal_checkpoint() on close. Defaults to True.
  |
  |      Returns:
  |      --------
@@ -154,10 +152,8 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      Examples:
  |      ---------
- |      >>> db = JSONLiteDB(':memory:')
+ |      >>> db = JSONLiteDB('mydata.db')
  |      >>> db.close()
- |
- |      This example demonstrates closing the database connection when done.
  |
  |  count(self, *query_args, **query_kwargs)
  |      Count the number of items matching the query criteria.
@@ -204,6 +200,8 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      >>> db.create_index(db.Q.first,db.Q.last)   # Multiple advanced queries
  |
  |      >>> db.create_index(('address','city'))     # Path with subkeys
+ |      >>> db.create_index(db.Q.address.city)      # Path with subkeys
+ |
  |      >>> db.create_index(db.Q.addresses[1])      # Path w/ list index
  |      >>> db.create_index(('addresses',3))        # Equiv to above
  |
@@ -237,20 +235,22 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      Examples:
  |      ---------
+ |      The following example creates a UNIQUE index on the 'first' and 'last' field,
+ |      then shows that dropping it w/o unique=True fails to do so but works as expected
+ |      when specified.
+ |
  |      >>> db = JSONLiteDB(':memory:')
  |      >>> db.create_index('first', 'last', unique=True)
  |      >>> print(db.indexes)
  |      {'ix_items_250e4243_UNIQUE': ['$."first"', '$."last"']}
+ |
  |      >>> db.drop_index('first', 'last') # Does nothing. Not the same index
  |      >>> print(db.indexes)
  |      {'ix_items_250e4243_UNIQUE': ['$."first"', '$."last"']}
+ |
  |      >>> db.drop_index('first', 'last', unique=True)
  |      >>> print(db.indexes)
  |      {}
- |
- |      This example creates a UNIQUE index on the 'first' and 'last' field, then shows
- |      that dropping it w/o unique=True fails to do so but works as expected when
- |      specified.
  |
  |  drop_index_by_name(self, name)
  |      Delete an index from the database by its name.
@@ -266,22 +266,51 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      Examples:
  |      ---------
+ |      The following example creates an index on the 'first' and 'last' field, then
+ |      drops it using its name.
+ |
  |      >>> db = JSONLiteDB(':memory:')
  |      >>> db.create_index('first', 'last')
  |      >>> print(db.indexes)
  |      {'ix_items_250e4243': ['$."first"', '$."last"']}
+ |
  |      >>> db.drop_index_by_name('ix_items_250e4243')
  |      >>> print(db.indexes)
  |      {}
- |
- |      This example creates an index on the 'first' and 'last' field, then drops it
- |      using its name.
  |
  |  execute(self, *args, **kwargs)
  |      Execute a SQL statement against the UNDERLYING sqlite3 database.
  |
  |      This method is a wrapper around the `execute` method of the SQLite database
  |      connection, allowing you to run SQL statements directly on the database.
+ |
+ |      Note that the sqlite3 connection is stored as the 'db' class variable and can be
+ |      accessed directly.
+ |
+ |      Parameters:
+ |      -----------
+ |      *args : tuple
+ |          Positional arguments that specify the SQL command and any parameters
+ |          to be used in the execution of the command.
+ |
+ |      **kwargs : dict
+ |          Keyword arguments that can be used to pass additional options for the
+ |          execution of the SQL command.
+ |
+ |      Returns:
+ |      --------
+ |      sqlite3.Cursor
+ |          A cursor object that can be used to iterate over the results of the
+ |          SQL query, if applicable.
+ |
+ |  executemany(self, *args, **kwargs)
+ |      Execute many SQL statements against the UNDERLYING sqlite3 database.
+ |
+ |      This method is a wrapper around the `executemany` method of the SQLite database
+ |      connection, allowing you to run SQL statements directly on the database.
+ |
+ |      Note that the sqlite3 connection is stored as the 'db' class variable and can be
+ |      accessed directly.
  |
  |      Parameters:
  |      -----------
@@ -320,11 +349,8 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      >>> db = JSONLiteDB(':memory:')
  |      >>> db.insert({'first': 'George', 'last': 'Martin', 'birthdate': 1926})
  |      >>> item = db.query_one(first='George', last='Martin')
- |      >>> retrieved_item = db.get_by_rowid(item.rowid)
- |      >>> print(retrieved_item)
+ |      >>> print(db.get_by_rowid(item.rowid))
  |      {'first': 'George', 'last': 'Martin', 'birthdate': 1926}
- |
- |      This example demonstrates retrieving an item using its rowid.
  |
  |  insert(self, *items, duplicates=False, _dump=True)
  |      Insert one or more JSON items into the database.
@@ -427,8 +453,6 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      {'first': 'John', 'last': 'Lennon'}
  |      {'first': 'Paul', 'last': 'McCartney'}
  |
- |      This example iterates over all items in the database.
- |
  |  one = query_one(self, *query_args, **query_kwargs)
  |
  |  patch(self, patchitem, *query_args, **query_kwargs)
@@ -461,22 +485,26 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      >>> db = JSONLiteDB(':memory:')
  |      >>> db.insert({'first': 'George', 'last': 'Martin', 'birthdate': 1926, 'role': 'producer'})
  |      >>> db.patch({'role': 'composer'}, first='George', last='Martin')
- |      >>> item = db.query_one(first='George', last='Martin')
- |      >>> print(item)
+ |      >>> print(db.query_one(first='George', last='Martin'))
  |      {'first': 'George', 'last': 'Martin', 'birthdate': 1926, 'role': 'composer'}
  |
+ |      The following example removes the key "role".
  |
  |      >>> db.patch({'role': None}, first='George', last='Martin')
- |      >>> item = db.query_one(first='George', last='Martin')
- |      >>> print(item)
+ |      >>> print(db.query_one(first='George', last='Martin'))
  |      {'first': 'George', 'last': 'Martin', 'birthdate': 1926}
  |
- |      This example removes the key "role".
+ |      The following example adds a field to *all* rows. Notice no query is specified
+ |
+ |      >>> db.patch({'band':'The Beatles'})
+ |      >>> print(db.count(band='The Beatles'))
+ |      5
  |
  |      Limitations:
  |      -----------
  |      Because `None` is the keyword to remove the field, it cannot be used to set
- |      the value to None. This is an SQLite limitation.
+ |      the value to None. This is an SQLite limitation. If this is needed, use a Python
+ |      loop.
  |
  |      References:
  |      -----------
@@ -500,23 +528,33 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      Examples:
  |      ---------
+ |      The following counts the number of occurrences of each key at the root level.
  |      >>> db = JSONLiteDB(':memory:')
  |      >>> db.insertmany([
  |      ...     {'first': 'John', 'last': 'Lennon', 'birthdate': 1940, 'address': {'city': 'New York', 'zip': '10001'}},
  |      ...     {'first': 'Paul', 'last': 'McCartney', 'birthdate': 1942, 'address': {'city': 'Liverpool', 'zip': 'L1 0AA'}},
  |      ...     {'first': 'George', 'last': 'Harrison', 'birthdate': 1943}
  |      ... ])
- |      >>> counts = db.path_counts()
- |      >>> print(counts)
+ |      >>> print(db.path_counts())
  |      {'first': 3, 'last': 3, 'birthdate': 3, 'address': 2}
  |
- |      This example counts the number of occurrences of each key at the root level.
- |
- |      >>> address_counts = db.path_counts('address')
- |      >>> print(address_counts)
+ |      The following example counts the number of occurrences of each key within the
+ |      'address' object.
+ |      >>> print(db.path_counts('address'))
  |      {'city': 2, 'zip': 2}
  |
- |      This example counts the number of occurrences of each key within the 'address' object.
+ |  purge(self)
+ |      Remove all items from the database.
+ |
+ |      Returns:
+ |      --------
+ |      None
+ |
+ |      Examples:
+ |      ---------
+ |      >>> db.purge()
+ |      >>> len(db)
+ |      0
  |
  |  query(self, *query_args, **query_kwargs)
  |      Query the database for items matching specified criteria.
@@ -552,59 +590,58 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      Query Forms:
  |      ------------
- |
  |      Queries can take some of the following forms:
  |        Keyword:
- |          db.query(key=val)
- |          db.query(key1=val1,key2=val2) # AND
+ |        >>> db.query(key=val)
+ |        >>> db.query(key1=val1,key2=val2) # AND
  |
  |        Arguments:
- |          db.query({'key':val})
+ |        >>> db.query({'key':val})
  |
- |          db.query({'key1':val1,'key2':val2}) # AND
- |          db.query({'key1':val1,},{'key2':val2}) # AND (same as above)
+ |        >>> db.query({'key1':val1,'key2':val2}) # AND
+ |        >>> db.query({'key1':val1,},{'key2':val2}) # AND (same as above)
  |
  |      Nested queries can be accomplished with arguments. The key can take
  |      the following forms:
  |
- |          - String starting with "$" and follows SQLite's JSON path. Must properly quote
- |            if it has dots, etc. No additional quoting is performed
+ |        - String starting with "$" and follows SQLite's JSON path. Must properly quote
+ |          if it has dots, etc. No additional quoting is performed
  |
- |              Example: {"$.key":'val'}            # Single key
- |                       {"$.key.subkey":'val'}     # Nested keys
- |                       {"$.key.subkey[3]":'val'}  # Nested keys to nested list.
+ |          >>> {"$.key":'val'}            # Single key
+ |          >>> {"$.key.subkey":'val'}     # Nested keys
+ |          >>> {"$.key.subkey[3]":'val'}  # Nested keys to nested list.
  |
- |          - Tuple string-keys or integer items. The quoteing will be handled for you!
+ |        - Tuple string-keys or integer items. The quoteing will be handled for you!
  |
- |              Example: {('key',): 'val'}
- |                       {('key','subkey'): 'val'}
- |                       {('key','subkey',3): 'val'}
+ |          >>> {('key',): 'val'}
+ |          >>> {('key','subkey'): 'val'}
+ |          >>> {('key','subkey',3): 'val'}
  |
- |          - Advaced queries via query objects (explained below)
+ |        - Advanced queries via query objects (explained below)
  |
  |      Advanced queries allow for more comparisons. Note: You must be careful
  |      about parentheses for operations. Keys are assigned with attributes (dot)
  |      and/or items (brackets). Items can have multiple separated by a comma and
  |      can include integers for items within a list.
  |
- |        Example: db.query(db.Q.key == val)
- |                 db.query(db.Q['key'] == val)
+ |        >>> db.query(db.Q.key == val)
+ |        >>> db.query(db.Q['key'] == val)
  |
- |                 db.query(db.Q.key.subkey == val)
- |                 db.query(db.Q['key'].subkey == val)
- |                 db.query(db.Q.key.['subkey'] == val)
- |                 db.query(db.Q['key','subkey'] == val)
+ |        >>> db.query(db.Q.key.subkey == val)
+ |        >>> db.query(db.Q['key'].subkey == val)
+ |        >>> db.query(db.Q.key.['subkey'] == val)
+ |        >>> db.query(db.Q['key','subkey'] == val)
  |
- |                 qb.query(db.Q.key.subkey[3] == val)
+ |        >>> qb.query(db.Q.key.subkey[3] == val)
  |
- |        Complex Example:
- |          db.query((db.Q['other key',9] >= 4) & (Q().key < 3)) # inequality
+ |      Complex Example:
+ |        >>> db.query((db.Q['other key',9] >= 4) & (Q().key < 3)) # inequality
  |
  |      Queries support most comparison operations (==, !=, >,>=,<, <=, etc) plus:
  |
  |          LIKE statements:  db.Q.key % "pat%tern"
  |          GLOB statements:  db.Q.key * "glob*pattern"
- |          REGEX statements: db.Q.key @ "regular.*expressions"
+ |          REGEX statements: db.Q.key @ "regular.*expressions" (using Python's re)
  |
  |      db.query() is also aliased to db() and db.search()
  |
@@ -636,14 +673,13 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      Examples:
  |      ---------
+ |      The following example queries for items where the path `details.birthdate` exists.
  |      >>> db = JSONLiteDB(':memory:')
  |      >>> db.insert({'first': 'John', 'last': 'Lennon', 'details': {'birthdate': 1940}})
  |      >>> result = db.query_by_path_exists(('details', 'birthdate'))
  |      >>> for item in result:
  |      ...     print(item)
  |      {'first': 'John', 'last': 'Lennon', 'details': {'birthdate': 1940}}
- |
- |      This example queries for items where the path `details.birthdate` exists.
  |
  |  query_one(self, *query_args, **query_kwargs)
  |      Query the database and return a single item matching the criteria.
@@ -674,6 +710,7 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |  remove(self, *query_args, **query_kwargs)
  |      Remove items from the database matching the specified query criteria.
+ |      WARNING: Not specifying any queries will purge the database.
  |
  |      Parameters:
  |      -----------
@@ -707,12 +744,11 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |
  |      Examples:
  |      ---------
+ |      The following removes an item from the database using its rowid.
  |      >>> db = JSONLiteDB(':memory:')
  |      >>> db.insert({'first': 'Ringo', 'last': 'Starr', 'birthdate': 1940})
  |      >>> item = db.query_one(first='Ringo', last='Starr')
  |      >>> db.remove_by_rowid(item.rowid)
- |
- |      This example removes an item from the database using its rowid.
  |
  |  search = query(self, *query_args, **query_kwargs)
  |
@@ -753,12 +789,22 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      ---------
  |      >>> db.update({'first': 'George', 'last': 'Harrison', 'birthdate': 1943}, rowid=1)
  |
- |  wal_checkpoint(self)
- |      Execute a write-ahead-log checkpoint
+ |  wal_checkpoint(self, mode=None)
+ |      Execute a write-ahead-log checkpoint optionally a given mode.
+ |
+ |      Parameters:
+ |      -----------
+ |      mode : None or str, optional
+ |          Mode for checkpoint. See [1] for details. Default is None. Options
+ |          are None, 'PASSIVE', 'FULL', 'RESTART', 'TRUNCATE'
  |
  |      Returns:
  |      --------
  |      None
+ |
+ |      References:
+ |      -----------
+ |      [1]
  |
  |  ----------------------------------------------------------------------
  |  Class methods defined here:
@@ -772,6 +818,7 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      -----------
  |      *args : positional arguments
  |          Arguments to pass to the constructor.
+ |
  |      **kwargs : keyword arguments
  |          Keyword arguments to pass to the constructor.
  |
@@ -789,6 +836,7 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      -----------
  |      *args : positional arguments
  |          Arguments to pass to the constructor.
+ |
  |      **kwargs : keyword arguments
  |          Keyword arguments to pass to the constructor.
  |
@@ -806,6 +854,7 @@ jsonlitedb.JSONLiteDB = class JSONLiteDB(builtins.object)
  |      -----------
  |      dbpath : str
  |          Path to the SQLite database file.
+ |
  |      **kwargs : keyword arguments
  |          Additional keyword arguments for JSONLiteDB and sqlite3.
  |

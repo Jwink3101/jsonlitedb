@@ -155,7 +155,7 @@ Multiples are always an AND query
 
 
 
-Can do seperate items. Or not
+Can do seperate items but it makes no difference.
 
 
 ```python
@@ -225,31 +225,10 @@ In addition they support
 
 
 ```python
->>> list(db.query(db.Q.role % "prod%"))
-```
-
-
-
-
-    [{'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'}]
-
-
-
-
-```python
->>> list(db.query(db.Q.role * "prod*"))
-```
-
-
-
-
-    [{'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'}]
-
-
-
-
-```python
->>> list(db.query(db.Q.role @ "prod"))
+>>> # This will all be the same
+>>> db.query(db.Q.role % "prod%").all()  # LIKE
+>>> db.query(db.Q.role * "prod*").all()  # GLOB
+>>> db.query(db.Q.role @ "prod").all()  # REGEXP -- Python based
 ```
 
 

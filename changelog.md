@@ -2,6 +2,15 @@
 
 Newest on top
 
+## 0.1.4
+
+- Added a `purge()` method, which is just `remove()` without any queries.  
+- Made empty queries be handled as everything (i.e., `WHERE 1 = 1`) to better match direct SQL queries without a "WHERE" clause.  
+    - Enables updating all rows with `patch()` and no query.  
+- *Internal*:   
+    - Combined and renamed two private methods that are always called together.  
+    - Cleaned up docstrings.
+
 ## 0.1.3 (2025-01-05)
 
 - WAL mode is now optional but on by default. Adds a wal_checkpoint() method and and calls it by default on close.
