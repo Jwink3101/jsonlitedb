@@ -292,7 +292,12 @@ And an index can also be used to enforce uniqueness amongst one or more fields
 >>> # Causes: IntegrityError: UNIQUE constraint failed: index 'ix_items_250e4243_UNIQUE'
 ```
 
-See [Advanced Usage](Advanced Usage.ipynb) for more examples including nested queries
+See *Advanced Usage* for more examples including nested queries
+
+
+```python
+>>> 
+```
 <!--- END AUTO GENERATED -->
 
 ## Queries and Paths

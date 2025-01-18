@@ -2,6 +2,12 @@
 
 Newest on top
 
+## 0.1.5
+
+- Accept pathlib.Path objects or existing database connections. The latter enabled additional flexibility to backup and make copies
+- Adds about() method
+- Cleaned up repo
+
 ## 0.1.4
 
 - Added a `purge()` method, which is just `remove()` without any queries.  

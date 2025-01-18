@@ -273,7 +273,7 @@ def test_JSONLiteDB_file():
     ##########################################################
     ## Test with a real db
     ##########################################################
-    name = f"!!!TEST_TMP.db"
+    name = Path("!!!TEST_TMP.db")
     try:
         db = JSONLiteDB(name, table="bla")
         db.insert({"key1": "val1"})
@@ -291,6 +291,8 @@ def test_JSONLiteDB_file():
         assert len(db) == 2
         # Make sure we don't see 'tmp' index. Just the one we made
         assert db.indexes == {"ix_bla_8c01cd08": ['$."key1"']}
+
+        print(db.about())
 
         # Directly read-only
         db = JSONLiteDB(f"file:{name}?mode=ro", table="bla", uri=True)
@@ -311,7 +313,42 @@ def test_JSONLiteDB_file():
             db.drop_index("key1")
 
     finally:
-        Path(name).unlink()
+        name.unlink()
+
+
+def test_JSONLiteDB_dbconnection():
+    db0 = sqlite3.connect(":memory:")
+    db1 = JSONLiteDB(db0)
+
+    assert db1.db is db0
+
+    repr(db1)
+    db1.insert(dict(key="value", other=dict(key="other value")))
+
+    row = db0.execute(
+        """
+    SELECT data
+    FROM items"""
+    ).fetchall()
+    assert len(row) == 1
+    assert json.loads(row[0]["data"]) == {
+        "key": "value",
+        "other": {"key": "other value"},
+    }
+
+    # Test backup. Use the db1.db as db1 is JSONLiteDB
+    db2 = sqlite3.connect(":memory:")
+    db1.db.backup(db2)
+    db3 = JSONLiteDB(db2)
+    assert db3.db is db2
+    assert db2 is not db0
+    assert db3.count(db3.Q.other.key == "other value") == 1
+
+    db4 = JSONLiteDB(db1.db)
+    assert db4.db is db1.db and db1.db is db0
+    assert len(db1) == 1
+    db4.insert({"this": "is", "a": ["new", "object"]})
+    assert len(db1) == len(db4) == 2
 
 
 def test_JSONLiteDB_adv():
@@ -1123,6 +1160,7 @@ def test_cli():
 if __name__ == "__main__":  # pragma: no cover
     test_JSONLiteDB_general()
     #     test_JSONLiteDB_file()
+    #     test_JSONLiteDB_dbconnection()
     #     test_JSONLiteDB_adv()
     #     test_JSONLiteDB_unicode()
     #     test_JSONLiteDB_updates()

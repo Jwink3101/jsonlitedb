@@ -24,6 +24,7 @@ def run_replace_convert(file):
     executer.preprocess(nb, {"metadata": {"path": "./"}})
 
     # clean
+    nb.metadata.get("language_info", {}).pop("version", None)
     for cell in nb.cells:
         nb.metadata.pop("signature", None)
         #         if 'execution_count' in cell:
@@ -49,7 +50,7 @@ def run_replace_convert(file):
     # Convert the notebook to Markdown
     body, resources = exporter.from_notebook_node(nb)
 
-    # This is also a hack since I can't seem to get the exporter to properly use
+    # This is a hack since I can't seem to get the exporter to properly use
     # a custom template. I will fix this eventually
     out = []
     body = iter(body.splitlines())
@@ -67,9 +68,11 @@ def run_replace_convert(file):
     return body
 
 
-run_replace_convert("Advanced Usage.ipynb")
-body = run_replace_convert("Basic Usage.ipynb")
+cmd = ["git", "ls-files", "*.ipynb"]
+ipynb_files = subprocess.check_output(cmd).decode().strip().split("\n")
+ipynbs = {ipynb_file: run_replace_convert(ipynb_file) for ipynb_file in ipynb_files}
 
+body = ipynbs["Demo/Basic Usage.ipynb"]
 md.append(body)
 
 with open("readme.md", "r") as rmin, open(".readme.md.swp", "wt") as rmout:
@@ -92,23 +95,23 @@ shutil.move(".readme.md.swp", "readme.md")
 
 ### Documentation for the objects
 
-api = []
-api += ["# API Documentation"]
-api += ["Auto-generated documentation"]
-
-api += ["## JSONLiteDB"]
-doc = subprocess.check_output(
-    [sys.executable, "-m", "pydoc", "jsonlitedb.JSONLiteDB"]
-).decode()
-api.append("```text\n" + doc + "```")
-
-api += ["## Query"]
-doc = subprocess.check_output(
-    [sys.executable, "-m", "pydoc", "jsonlitedb.Query"]
-).decode()
-api.append("```text\n" + doc + "```")
-
-
-with open(".api.md.swp", "wt") as fp:
-    fp.write("\n\n".join(api))
-shutil.move(".api.md.swp", "api.md")
+# api = []
+# api += ["# API Documentation"]
+# api += ["Auto-generated documentation"]
+#
+# api += ["## JSONLiteDB"]
+# doc = subprocess.check_output(
+#     [sys.executable, "-m", "pydoc", "jsonlitedb.JSONLiteDB"]
+# ).decode()
+# api.append("```text\n" + doc + "```")
+#
+# api += ["## Query"]
+# doc = subprocess.check_output(
+#     [sys.executable, "-m", "pydoc", "jsonlitedb.Query"]
+# ).decode()
+# api.append("```text\n" + doc + "```")
+#
+#
+# with open(".api.md.swp", "wt") as fp:
+#     fp.write("\n\n".join(api))
+# shutil.move(".api.md.swp", "api.md")

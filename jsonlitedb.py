@@ -12,14 +12,15 @@ import re
 import sqlite3
 import string
 import sys
-from collections.abc import MutableMapping
+from collections import namedtuple
 from functools import partialmethod
+from pathlib import Path
 from textwrap import dedent
 
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.1.4"
+__version__ = "0.1.5"
 
 __all__ = ["JSONLiteDB", "Q", "Query", "sqlite_quote", "Row"]
 
@@ -38,8 +39,9 @@ class JSONLiteDB:
 
     Parameters:
     -----------
-    dbpath : str
+    dbpath : str or Path or sqlite3.Connection
         Path to the SQLite database file. Use ':memory:' for an in-memory database.
+        If given an sqlite3.Connection, will use that and ignore sqlitekws
 
     wal_mode : bool, optional
         Whether to use write-ahead-logging (WAL) mode. Defaults to True.
@@ -77,10 +79,18 @@ class JSONLiteDB:
         table=DEFAULT_TABLE,
         **sqlitekws,
     ):
-        self.dbpath = dbpath
-        self.sqlitekws = sqlitekws
+        if isinstance(dbpath, Path):
+            dbpath = str(dbpath)
 
-        self.db = sqlite3.connect(self.dbpath, **sqlitekws)
+        if isinstance(dbpath, sqlite3.Connection):
+            self.dbpath = "*existing connection*"
+            self.db = dbpath
+            self.sqlitekws = {}
+        else:
+            self.dbpath = dbpath
+            self.sqlitekws = sqlitekws
+            self.db = sqlite3.connect(self.dbpath, **sqlitekws)
+
         self.db.row_factory = Row
         self.db.set_trace_callback(sqldebug)
         self.db.create_function("REGEXP", 2, regexp, deterministic=True)
@@ -1094,49 +1104,60 @@ class JSONLiteDB:
 
     indices = indexes
 
+    def about(self):
+        r = self.execute(
+            f"""
+                SELECT * FROM {self.table}_kv 
+                WHERE key = ? OR key = ?
+                ORDER BY key""",
+            ("created", "version"),
+        ).fetchall()
+        # Note it is ORDER BY so the order wont change
+        created, version = [i["val"] for i in r]
+        return _about_obj(created=created, version=version)
+
     def _init(self, wal_mode=True):
         db = self.db
         try:
-            with db:
-                r = db.execute(
-                    f"""
-                    SELECT * FROM {self.table}_kv 
-                    WHERE key = ? OR key = ?
-                    ORDER BY key""",
-                    ("created", "version"),
-                ).fetchall()
-                if len(r) == 2:  # Note it is ORDER BY so the order wont change
-                    created, version = [i["val"] for i in r]
-                    logger.debug(f"{created = } {version = }")
-                    return
+            created, version = self.about()
+            logger.debug(f"DB Exists: {created = } {version = }")
+            return
         except:
             logger.debug("DB does not exists. Creating")
 
         with self:
             db.execute(
-                f"""
+                dedent(
+                    f"""
                 CREATE TABLE IF NOT EXISTS {self.table}(
                     rowid INTEGER PRIMARY KEY AUTOINCREMENT,
-                    data JSON
+                    data TEXT
                 )"""
+                )
             )
             db.execute(
-                f"""
+                dedent(
+                    f"""
                 CREATE TABLE IF NOT EXISTS {self.table}_kv(
                     key TEXT PRIMARY KEY,
-                    val BLOB
+                    val TEXT
                 )"""
+                )
             )
             db.execute(
-                f"""
+                dedent(
+                    f"""
                 INSERT OR IGNORE INTO {self.table}_kv VALUES (?,?)
-                """,
+                """
+                ),
                 ("created", datetime.datetime.now().astimezone().isoformat()),
             )
             db.execute(
-                f"""
+                dedent(
+                    f"""
                 INSERT OR IGNORE INTO {self.table}_kv VALUES (?,?)
-                """,
+                """
+                ),
                 ("version", f"JSONLiteDB-{__version__}"),
             )
 
@@ -1551,6 +1572,9 @@ def sqldebug(sql):  # pragma: no cover
     # This is really only used in devel.
     if os.environ.get("JSONLiteDB_SQL_DEBUG", "false").lower() == "true":
         sqllogger.debug(dedent(sql))
+
+
+_about_obj = namedtuple("About", ("created", "version"))
 
 
 def _query_tuple2jsonpath(*args, **kwargs):
