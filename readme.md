@@ -103,7 +103,7 @@ Let's do some simple queries. The default `query()` returns an iterator so we wr
 
 
 ```python
->>> list(db.query(first="George"))
+>>> db.query(first="George").all()
 ```
 
 
@@ -116,13 +116,29 @@ Let's do some simple queries. The default `query()` returns an iterator so we wr
 
 
 ```python
->>> list(db.query(first="George", last="Martin"))
+>>> # If you only one the first result, you can use db.one().
+>>> # On the SQL call, this adds "LIMIT 1"
+>>> db.one(first="George", last="Martin")
 ```
 
 
 
 
-    [{'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'}]
+    {'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'}
+
+
+
+
+```python
+>>> # This will also only give you the first row but it is
+>>> # less efficient as it doesn't have a "LIMIT 1" clause.
+>>> db.query(first="George", last="Martin").one()
+```
+
+
+
+
+    {'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'}
 
 
 
@@ -130,6 +146,7 @@ Now let's query with a dictionary to match
 
 
 ```python
+>>> # queries return a QueryResult which can be iterated. list(QueryResult) <==> QueryResult.all()
 >>> list(db.query({"first": "George"}))
 ```
 
@@ -145,7 +162,7 @@ Multiples are always an AND query
 
 
 ```python
->>> list(db.query({"first": "George", "last": "Martin"}))
+>>> db.query({"first": "George", "last": "Martin"}).all()
 ```
 
 
@@ -159,7 +176,7 @@ Can do seperate items but it makes no difference.
 
 
 ```python
->>> list(db.query({"first": "George"}, {"last": "Martin"}))
+>>> db.query({"first": "George"}, {"last": "Martin"}).all()
 ```
 
 
@@ -169,13 +186,25 @@ Can do seperate items but it makes no difference.
 
 
 
+
+```python
+>>> db.count(first="George")
+```
+
+
+
+
+    2
+
+
+
 ### Query Objects
 
 Query objects enable more complex combinations and inequalities. Query objects can be from the database (`db.Query` or `db.Q`) or created on thier own (`Query()` or `Q()`). They are all the same. 
 
 
 ```python
->>> list(db.query(db.Q.first == "George"))
+>>> db.query(db.Q.first == "George").all()
 ```
 
 
@@ -190,7 +219,7 @@ Note that you need to be careful with parentheses as the operator precedance for
 
 
 ```python
->>> list(db.query((db.Q.first == "George") & (db.Q.last == "Martin")))
+>>> db.query((db.Q.first == "George") & (db.Q.last == "Martin")).all()
 ```
 
 

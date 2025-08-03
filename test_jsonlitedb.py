@@ -432,6 +432,15 @@ def test_JSONLiteDB_adv():
         "extra2": 1,
     }
     assert db.path_counts("extra") == {}  # no subitems. Just strings
+    assert set(db.keys()) == {
+        "extra",
+        "extra1",
+        "extra2",
+        "first",
+        "kids",
+        "last",
+        "phone",
+    }
 
     assert (
         {"extra2": 1}
@@ -991,6 +1000,14 @@ def test_sqlite_quote():
         == "'Robert''); DROP TABLE Students;--'"
     )
 
+    # Multi-line
+    assert sqlite_quote("hi\nthere") == "'hi\nthere'"
+    assert sqlite_quote("hi\nthere\n") == "'hi\nthere\n'", "trailing new line"
+    assert sqlite_quote("hi\nthere\\n") == "'hi\nthere\\n'", "escaped"
+
+    assert sqlite_quote(" hi\nthere") == "' hi\nthere'"
+    assert sqlite_quote(" hi\nthere \n ") == "' hi\nthere \n '"
+
 
 def test_split_no_double_quotes():
     jsonlitedb.split_no_double_quotes("a.b.c", ".") == ["a", "b", "c"]
@@ -1097,7 +1114,7 @@ def test_cli():
         stdin.seek(0)
 
         with MockArgv(
-            ["--table", "cli", "insert", dbpath, "-", "-"], stdin=stdin, shift=1
+            ["insert", "--table", "cli", dbpath, "-", "-"], stdin=stdin, shift=1
         ):
             cli()
 
@@ -1114,7 +1131,7 @@ def test_cli():
             )
         )
         with MockArgv(
-            ["--table", "cli", "insert", dbpath, file1, "--duplicates", "ignore"],
+            ["insert", dbpath, file1, "--table", "cli", "--duplicates", "ignore"],
             shift=1,
         ):
             cli()
@@ -1132,7 +1149,7 @@ def test_cli():
             print(json.dumps({"name": "test8", "key2": "jsonl", "ii": 8}), file=fp)
 
         with MockArgv(
-            ["--table", "cli", "insert", dbpath, file2, "--duplicates", "replace"],
+            ["insert", dbpath, file2, "--table", "cli", "--duplicates", "replace"],
             shift=1,
         ):
             cli()
@@ -1144,7 +1161,7 @@ def test_cli():
         assert "key0" not in dup
         assert "key1" not in dup
 
-        with MockArgv(["--table", "cli", "dump", dbpath, "--output", dump], shift=1):
+        with MockArgv(["dump", dbpath, "--table", "cli", "--output", dump], shift=1):
             cli()
         dumpout = Path(dump).read_text().strip()
         assert len(dumpout.split("\n")) == 7
@@ -1159,25 +1176,25 @@ def test_cli():
 
 if __name__ == "__main__":  # pragma: no cover
     test_JSONLiteDB_general()
-    #     test_JSONLiteDB_file()
-    #     test_JSONLiteDB_dbconnection()
-    #     test_JSONLiteDB_adv()
-    #     test_JSONLiteDB_unicode()
-    #     test_JSONLiteDB_updates()
-    #     test_JSONLiteDB_query_results()
-    #     test_JSONLiteDB_patch()
-    #     test_Query()
-    #     test_query_args()
-    #     test_build_index_paths()
-    #     test_query2sql()
-    #     test_split_query()
-    #     test_Row()
-    #     test_listify()
-    #     test_group_ints_with_preceeding_string()
-    #     test_sqlite_quote()
-    #     test_split_no_double_quotes()
-    #     test_non_dicts()
-    #     test_cli()
+    test_JSONLiteDB_file()
+    test_JSONLiteDB_dbconnection()
+    test_JSONLiteDB_adv()
+    test_JSONLiteDB_unicode()
+    test_JSONLiteDB_updates()
+    test_JSONLiteDB_query_results()
+    test_JSONLiteDB_patch()
+    test_Query()
+    test_query_args()
+    test_build_index_paths()
+    test_query2sql()
+    test_split_query()
+    test_Row()
+    test_listify()
+    test_group_ints_with_preceeding_string()
+    test_sqlite_quote()
+    test_split_no_double_quotes()
+    test_non_dicts()
+    test_cli()
 
     print("!" * 50)
     print("All tests pass")

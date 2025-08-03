@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import base64
 import datetime
 import hashlib
 import io
 import json
 import logging
 import os
-import random
 import re
 import sqlite3
-import string
 import sys
 from collections import namedtuple
 from functools import partialmethod
@@ -20,7 +19,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.1.5"
+__version__ = "0.1.7"
 
 __all__ = ["JSONLiteDB", "Q", "Query", "sqlite_quote", "Row"]
 
@@ -918,6 +917,7 @@ class JSONLiteDB:
         Examples:
         ---------
         The following counts the number of occurrences of each key at the root level.
+
         >>> db = JSONLiteDB(':memory:')
         >>> db.insertmany([
         ...     {'first': 'John', 'last': 'Lennon', 'birthdate': 1940, 'address': {'city': 'New York', 'zip': '10001'}},
@@ -929,6 +929,7 @@ class JSONLiteDB:
 
         The following example counts the number of occurrences of each key within the
         'address' object.
+
         >>> print(db.path_counts('address'))
         {'city': 2, 'zip': 2}
         """
@@ -949,6 +950,34 @@ class JSONLiteDB:
         counts = {row["key"]: row["count"] for row in res}
         counts.pop(None, None)  # do not include nothing
         return counts
+
+    def keys(self, start=None):
+        """
+        Return the set of keys (JSON paths) at the specified path.
+
+        This is a shorthand for `path_counts(start).keys()` and returns only the
+        keys found at the specified path in the JSON structure.
+
+        Parameters
+        ----------
+        start : str, tuple, or None, optional
+            The starting path to extract keys from. If None (default), keys at the
+            root level are returned. Accepts the same input as `path_counts`.
+
+        Returns
+        -------
+        KeysView
+            A view object containing the keys (paths) at the specified location.
+
+        Examples
+        --------
+        >>> db.keys()
+        dict_keys(['first', 'last', 'birthdate', 'address'])
+
+        >>> db.keys('address')
+        dict_keys(['city', 'zip'])
+        """
+        return self.path_counts(start=start).keys()
 
     def create_index(self, *paths, unique=False):
         """
@@ -1568,10 +1597,16 @@ Q = Query
 ###################################################
 ## Helper Utils
 ###################################################
-def sqldebug(sql):  # pragma: no cover
-    # This is really only used in devel.
-    if os.environ.get("JSONLiteDB_SQL_DEBUG", "false").lower() == "true":
+SQL_DEBUG = os.environ.get("JSONLiteDB_SQL_DEBUG", "false").lower() == "true"
+if SQL_DEBUG:  # pragma: no cover
+
+    def sqldebug(sql):
         sqllogger.debug(dedent(sql))
+
+else:
+
+    def sqldebug(sql):
+        pass
 
 
 _about_obj = namedtuple("About", ("created", "version"))
@@ -1753,7 +1788,7 @@ def sqlite_quote(text):
     """A bit of a hack get sqlite escaped text"""
     # You could do this with just a replace and add quotes but I worry I may
     # miss something so use sqlite's directly to be sure. And this whole process
-    # is about 15.6 µs ± 101 ns last time I profiled. Not worth improving further.
+    # is about 15.6 µs ± 101 ns last time I profiled it. Not worth improving further.
     #
     # Note: It is still better to use paramater substitution whenever possible. But
     #       sqlite doesn't support them in JSON_EXTRACT and other functions so it
@@ -1762,7 +1797,7 @@ def sqlite_quote(text):
     tempdb = sqlite3.connect(":memory:")
     tempdb.set_trace_callback(quoted.write)
     tempdb.execute("SELECT\n?", (text,))
-    quoted = quoted.getvalue().splitlines()[1]
+    quoted = "\n".join(quoted.getvalue().splitlines()[1:])
     return quoted
 
 
@@ -1771,7 +1806,7 @@ def split_no_double_quotes(s, delimiter):
     Splits 's' at 'delimiter' but ignores items in double quotes
     """
     quoted = re.findall(r"(\".*?\")", s)
-    reps = {q: randstr(10) for q in quoted}  # Repeats are fine!
+    reps = {q: randstr() for q in quoted}  # Could have harmless repeats
     ireps = {v: k for k, v in reps.items()}
 
     s = translate(s, reps)
@@ -1779,12 +1814,12 @@ def split_no_double_quotes(s, delimiter):
     return [translate(t, ireps) for t in s]
 
 
-def randstr(N=5):
-    c = string.ascii_letters + string.digits
-    return "".join(random.choice(c) for _ in range(N))
+def randstr(N=16):
+    rb = os.urandom(N)
+    return base64.urlsafe_b64encode(rb).rstrip(b"=").decode("ascii")
 
 
-def randkey(N=5):
+def randkey(N=16):
     return f"!>>{randstr(N=N)}<<!"
 
 
@@ -1812,8 +1847,13 @@ def cli():
 
     parser = argparse.ArgumentParser(description=desc)
 
-    parser.add_argument(
-        "--table", default="items", metavar="NAME", help="['%(default)s'] Table Name"
+    global_parent = argparse.ArgumentParser(add_help=False)
+
+    global_parent.add_argument(
+        "--table",
+        default="items",
+        metavar="NAME",
+        help="Table Name. Default: '%(default)s'",
     )
 
     parser.add_argument(
@@ -1829,6 +1869,7 @@ def cli():
 
     load = subparser.add_parser(
         "insert",
+        parents=[global_parent],
         help="insert JSON into a database",
     )
 
@@ -1855,6 +1896,8 @@ def cli():
     dump = subparser.add_parser(
         "dump",
         help="dump database to JSONL",
+        parents=[global_parent],
+        description="Dump the ",
     )
 
     dump.add_argument("dbpath", help="JSONLiteDB file")

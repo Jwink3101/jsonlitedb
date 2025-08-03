@@ -2,6 +2,14 @@
 
 Newest on top
 
+## 0.1.6
+
+- Added `keys()` method as shortcut for `path_counts(...).keys()`
+
+## 0.1.6
+
+- Updated the CLI to make it more clear how to specify `--table` by making it an option on each as opposed to a global option.
+
 ## 0.1.5
 
 - Accept pathlib.Path objects or existing database connections. The latter enabled additional flexibility to backup and make copies
@@ -21,7 +29,7 @@ Newest on top
 
 - WAL mode is now optional but on by default. Adds a wal_checkpoint() method and and calls it by default on close.
 
-**1.0 release candidate**
+~~**1.0 release candidate**~~
 
 ## 0.1.2 (2025-01-05)
 
