@@ -2,7 +2,13 @@
 
 Newest on top
 
-## 0.1.6
+## 0.1.8
+
+- Added `_limit` to query and explained the advantage of `query()` vs `query_one()`
+- Changed the `__getitem__` and `__delitem__` to raise an `IndexError` if the rowid does not exist. Improved documentation and updated tests.
+- Improved docstrings and documentation.
+
+## 0.1.7
 
 - Added `keys()` method as shortcut for `path_counts(...).keys()`
 

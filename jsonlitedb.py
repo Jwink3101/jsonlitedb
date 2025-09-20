@@ -19,7 +19,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.1.7"
+__version__ = "0.1.8"
 
 __all__ = ["JSONLiteDB", "Q", "Query", "sqlite_quote", "Row"]
 
@@ -31,8 +31,8 @@ DEFAULT_TABLE = "items"
 
 class JSONLiteDB:
     """
-    JSON(Lines) SQLite Database. Simple SQLite3 backed JSON-based document database
-    with powerful queries and indexing.
+    JSON(Lines) SQLite Database. Simple SQLite3 backed JSON document database with
+    powerful queries and indexing.
 
     Initialize a JSONLiteDB instance.
 
@@ -274,10 +274,17 @@ class JSONLiteDB:
         _load : bool, optional
             Determines whether to load the result as JSON objects. Defaults to True.
 
+        _limit : int, optional
+            Adds a "LIMIT <N>" statement to the query. Useful to speed up results. Note
+            that will always still return the iterator. See query_one() for a method that
+            returns the first item
+
         Returns:
         --------
         QueryResult
-            An iterator of DBDicts, each representing a JSON object in the database.
+            An iterator of DBDict or DBList object, each representing a JSON object
+            in the database. DBDict and DBList are just like normal dicts or lists but
+            allow for the 'rowid' attribute.
 
         Examples:
         ---------
@@ -294,10 +301,12 @@ class JSONLiteDB:
         ------------
         Queries can take some of the following forms:
           Keyword:
+
           >>> db.query(key=val)
           >>> db.query(key1=val1,key2=val2) # AND
 
           Arguments:
+
           >>> db.query({'key':val})
 
           >>> db.query({'key1':val1,'key2':val2}) # AND
@@ -306,25 +315,25 @@ class JSONLiteDB:
         Nested queries can be accomplished with arguments. The key can take
         the following forms:
 
-          - String starting with "$" and follows SQLite's JSON path. Must properly quote
-            if it has dots, etc. No additional quoting is performed
+          1. String starting with "$" and follows SQLite's JSON path. Must properly quote
+             if it has dots, etc. No additional quoting is performed
 
-            >>> {"$.key":'val'}            # Single key
-            >>> {"$.key.subkey":'val'}     # Nested keys
-            >>> {"$.key.subkey[3]":'val'}  # Nested keys to nested list.
+             >>> {"$.key":'val'}            # Single key
+             >>> {"$.key.subkey":'val'}     # Nested keys
+             >>> {"$.key.subkey[3]":'val'}  # Nested keys to nested list.
 
-          - Tuple string-keys or integer items. The quoteing will be handled for you!
+          2. Tuple string-keys or integer items. The quoting will be handled for you.
 
-            >>> {('key',): 'val'}
-            >>> {('key','subkey'): 'val'}
-            >>> {('key','subkey',3): 'val'}
+             >>> {('key',): 'val'}
+             >>> {('key','subkey'): 'val'}
+             >>> {('key','subkey',3): 'val'}
 
-          - Advanced queries via query objects (explained below)
+          3. Advanced queries via query objects (explained below)
 
         Advanced queries allow for more comparisons. Note: You must be careful
         about parentheses for operations. Keys are assigned with attributes (dot)
         and/or items (brackets). Items can have multiple separated by a comma and
-        can include integers for items within a list.
+        can include integers for items within a list. Let 'db' be the JSONLiteDB object.
 
           >>> db.query(db.Q.key == val)
           >>> db.query(db.Q['key'] == val)
@@ -335,20 +344,32 @@ class JSONLiteDB:
           >>> db.query(db.Q['key','subkey'] == val)
 
           >>> qb.query(db.Q.key.subkey[3] == val)
+          >>> qb.query(db.Q.key['subkey',3] == val)
 
         Complex Example:
+
           >>> db.query((db.Q['other key',9] >= 4) & (Q().key < 3)) # inequality
 
         Queries support most comparison operations (==, !=, >,>=,<, <=, etc) plus:
 
             LIKE statements:  db.Q.key % "pat%tern"
             GLOB statements:  db.Q.key * "glob*pattern"
-            REGEX statements: db.Q.key @ "regular.*expressions" (using Python's re)
+            REGEX statements: db.Q.key @ "regular.*expression"  # See note
+
+        Note regular expressions ("@") use Python's 're' library. These are often slower
+        than LIKE ('%') and GLOB ('*') queries which use native SQLite queries.
+
+        Warning:
+            While the various constructions may be *functionally* the same (e.g.
+            '$.key.subkey' vs ('key','subkey')), when using indexes, they will not
+            be the same!
 
         db.query() is also aliased to db() and db.search()
         """
         _load = query_kwargs.pop("_load", True)
-        _1 = query_kwargs.pop("_1", False)  # private
+        _limit = query_kwargs.pop("_limit", None)
+
+        limit = f"LIMIT {_limit:d}" if _limit else ""
 
         qstr, qvals = JSONLiteDB._query2sql(*query_args, **query_kwargs)
         res = self.execute(
@@ -356,7 +377,7 @@ class JSONLiteDB:
             SELECT rowid, data FROM {self.table} 
             WHERE
                 {qstr}
-            {"LIMIT 1" if _1 else ""}
+            {limit}
             """,
             qvals,
         )
@@ -368,6 +389,9 @@ class JSONLiteDB:
     def query_one(self, *query_args, **query_kwargs):
         """
         Query the database and return a single item matching the criteria.
+
+        The only difference between this and query() is that query_one adds
+        "LIMIT 1" to the query.
 
         Parameters:
         -----------
@@ -381,9 +405,9 @@ class JSONLiteDB:
 
         Returns:
         --------
-        DBDict or None
-            A single DBDict object representing the JSON item, or None if no match is
-            found.
+        DBDict, DBList or None
+            A single DBDict or DBList object representing the JSON item, or None
+            if no match is found.
 
         Examples:
         ---------
@@ -393,7 +417,7 @@ class JSONLiteDB:
         ---------
         query : Method for querying multiple items.
         """
-        query_kwargs["_1"] = True
+        query_kwargs["_limit"] = 1
         try:
             return next(self.query(*query_args, **query_kwargs))
         except StopIteration:
@@ -403,7 +427,8 @@ class JSONLiteDB:
 
     def count(self, *query_args, **query_kwargs):
         """
-        Count the number of items matching the query criteria.
+        Count the number of items matching the query criteria. This uses SQLite to
+        count and is faster than counting the items in a query.
 
         Parameters:
         -----------
@@ -583,7 +608,8 @@ class JSONLiteDB:
     def remove(self, *query_args, **query_kwargs):
         """
         Remove items from the database matching the specified query criteria.
-        WARNING: Not specifying any queries will purge the database.
+
+        WARNING: Not specifying any queries will purge the database!
 
         Parameters:
         -----------
@@ -666,8 +692,48 @@ class JSONLiteDB:
     delete_by_rowid = remove_by_rowid
 
     def __delitem__(self, rowid):
+        """
+        Delete an item with a given rowid
+
+        Parameters
+        ----------
+        rowid : int
+            The rowid of the item to deleye. Must correspond to a valid SQLite rowid
+            (note that rowids start at 1).
+
+        Raises
+        ------
+        TypeError
+            If ``rowid`` is a tuple. Only a single item can be deleted at a time.
+            See remove_by_rowid() to delete multiples
+
+        IndexError
+            If no item exists with the given rowid.
+
+        See Also
+        --------
+        remove_by_rowid : Lower-level delete/remove method. Accepts multiple rowids and
+                          does not raise an IndexError
+
+        Examples
+        --------
+        >>> db = JSONLiteDB(':memory:')
+        >>> db.insert({'first': 'George', 'last': 'Martin'})
+        >>> del db[1] # rowids start at 1
+        >>> len(db)
+        0
+
+        """
         if isinstance(rowid, tuple):
             raise TypeError("Can only delete one item at a time. Try delete()")
+
+        check = self.execute(
+            f"SELECT 1 FROM  {self.table} WHERE rowid = ? LIMIT 1", (rowid,)
+        ).fetchone()
+
+        if not check:
+            raise IndexError(f"{rowid = } not found")
+
         return self.remove_by_rowid(rowid)
 
     def get_by_rowid(self, rowid, *, _load=True):
@@ -682,10 +748,15 @@ class JSONLiteDB:
         _load : bool, optional
             Determines whether to load the result as a JSON object. Defaults to True.
 
-        Returns:
-        --------
-        DBDict or None
-            The item as a DBDict if found, or None if no item exists with the specified rowid.
+        Returns
+        -------
+        DBDict or DBList or object
+            The item retrieved from the database. The type depends on the stored data:
+            - ``DBDict`` if the item is a JSON object (dict).
+            - ``DBList`` if the item is a JSON array (list).
+            - The raw value otherwise.
+            DBDict and DBList objects are just like dict and list but have a 'rowid'
+            attribute
 
         Examples:
         ---------
@@ -725,9 +796,51 @@ class JSONLiteDB:
         return item
 
     def __getitem__(self, rowid):
+        """
+        Retrieve an item from the database by its rowid.
+
+        Parameters
+        ----------
+        rowid : int
+            The rowid of the item to retrieve. Must correspond to a valid SQLite rowid
+            (note that rowids start at 1).
+
+        Returns
+        -------
+        DBDict or DBList or object
+            The item retrieved from the database. The type depends on the stored data:
+            - ``DBDict`` if the item is a JSON object (dict).
+            - ``DBList`` if the item is a JSON array (list).
+            - The raw value otherwise.
+            DBDict and DBList objects are just like dict and list but have a 'rowid'
+            attribute
+
+        Raises
+        ------
+        TypeError
+            If ``rowid`` is a tuple. Only a single item can be retrieved at a time.
+        IndexError
+            If no item exists with the given rowid.
+
+        See Also
+        --------
+        get_by_rowid : Lower-level retrieval method. Returns ``None`` instead of raising
+            ``IndexError``.
+
+        Examples
+        --------
+        >>> db = JSONLiteDB(':memory:')
+        >>> db.insert({'first': 'George', 'last': 'Martin'})
+        >>> item = db.query_one(first='George', last='Martin')
+        >>> db[item.rowid]
+        {'first': 'George', 'last': 'Martin'}
+        """
         if isinstance(rowid, tuple):
             raise TypeError("Can only get one item at a time")
-        return self.get_by_rowid(rowid)
+        item = self.get_by_rowid(rowid)
+        if item is None:  # Explicit for None to avoid empty dict raising error
+            raise IndexError(f"{rowid = } not found")
+        return item
 
     def items(self, _load=True):
         """
@@ -746,7 +859,10 @@ class JSONLiteDB:
         Examples:
         ---------
         >>> db = JSONLiteDB(':memory:')
-        >>> db.insertmany([{'first': 'John', 'last': 'Lennon'}, {'first': 'Paul', 'last': 'McCartney'}])
+        >>> db.insertmany([
+            {'first': 'John', 'last': 'Lennon'},
+            {'first': 'Paul', 'last': 'McCartney'}
+        ])
         >>> for item in db.items():
         ...     print(item)
         {'first': 'John', 'last': 'Lennon'}
@@ -760,7 +876,7 @@ class JSONLiteDB:
 
     def update(self, item, rowid=None, duplicates=False, _dump=True):
         """
-        Update an existing item in the database.
+        Update an existing row in the database with new a new row.
 
         Parameters:
         -----------
@@ -789,6 +905,10 @@ class JSONLiteDB:
 
         ValueError
             If `duplicates` is not one of {True, False, "replace", "ignore"}.
+
+        See Also:
+        --------
+        patch: Apply a patch to all items matching the specified query criteria.
 
         Examples:
         ---------
@@ -1076,7 +1196,8 @@ class JSONLiteDB:
         Parameters:
         -----------
         *paths : variable length argument list
-            Paths for which the index was created. Can be strings, tuples, or query objects.
+            Paths for which the index was created. Can be strings, tuples, or query
+             objects.
 
         unique : bool, optional
             Indicates whether the index was created as unique. Defaults to False.
@@ -1301,7 +1422,7 @@ class JSONLiteDB:
 
         References:
         -----------
-        [1]
+        [1] https://sqlite.org/wal.html#ckpt
         """
         if not mode in {None, "PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
             raise ValueError(f"Invalid {mode = } specified")
@@ -1786,9 +1907,9 @@ def group_ints_with_preceeding_string(seq):
 
 def sqlite_quote(text):
     """A bit of a hack get sqlite escaped text"""
-    # You could do this with just a replace and add quotes but I worry I may
-    # miss something so use sqlite's directly to be sure. And this whole process
-    # is about 15.6 µs ± 101 ns last time I profiled it. Not worth improving further.
+    # You could do this with just a replace and add quotes but this puts the logic
+    # to the sqlite library and is presumably more robust and safe. This whole process
+    # is about (15.6 ± 0.101) µs last time I profiled it. Not worth improving further.
     #
     # Note: It is still better to use paramater substitution whenever possible. But
     #       sqlite doesn't support them in JSON_EXTRACT and other functions so it
@@ -1848,7 +1969,6 @@ def cli():
     parser = argparse.ArgumentParser(description=desc)
 
     global_parent = argparse.ArgumentParser(add_help=False)
-
     global_parent.add_argument(
         "--table",
         default="items",
@@ -1857,7 +1977,10 @@ def cli():
     )
 
     parser.add_argument(
-        "-v", "--version", action="version", version="%(prog)s-" + __version__
+        "-v",
+        "--version",
+        action="version",
+        version="%(prog)s-" + __version__,
     )
     subparser = parser.add_subparsers(
         dest="command",

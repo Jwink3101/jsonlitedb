@@ -78,6 +78,8 @@ def test_JSONLiteDB_general():
         },
     ]
 
+    assert len(db.query(first="John", _limit=1).all()) == 1, "Failed _limit"
+
     # Multiple conditions. Also test _load = False
     assert (
         [
@@ -147,7 +149,8 @@ def test_JSONLiteDB_general():
     )
     with pytest.raises(TypeError):
         db[4, 5]
-    assert not db[9999]
+    with pytest.raises(IndexError):
+        db[9999]
 
     ## Remove
     db.remove(new=True)
@@ -215,6 +218,9 @@ def test_JSONLiteDB_general():
     with pytest.raises(TypeError):
         del db[1, 2, 3]  # Can't do a tuple
 
+    with pytest.raises(IndexError):
+        del db[123456789]  # Must be an existing rowid
+
     ## Advanced Queries
     assert db.count(Q().born <= 1940) == 3
     assert db.count(Q().born >= 1942) == 2
@@ -231,6 +237,11 @@ def test_JSONLiteDB_general():
     assert db.count(db.Q.role @ "prod.c") == 1
     assert db.count(db.Q.role @ "prod.*r") == 1
     assert db.count(db.Q.role @ "prod.x") == 0
+
+    # Limits
+    assert len(db(db.Q.born > 0).all()) == 5
+    assert len(db(db.Q.born > 0, _limit=3).all()) == 3
+    assert len(db(db.Q.born > 0, _limit=10).all()) == 5
 
     ## Single returns
     assert (
