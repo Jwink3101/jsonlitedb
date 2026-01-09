@@ -59,6 +59,52 @@ def test_JSONLiteDB_general():
         == list(db(Q().first == "Paul"))
     )
 
+    # Sorting / order by
+    assert db.query(_orderby="born").all() == [
+        {"first": "George", "last": "Martin", "born": 1926, "role": "producer"},
+        {"first": "John", "last": "Lennon", "born": 1940, "role": "guitar"},
+        {"first": "Ringo", "last": "Starr", "born": 1940, "role": "drums"},
+        {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
+        {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
+    ]
+    assert db.query(_orderby="-born").all() == [
+        {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
+        {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
+        {"first": "John", "last": "Lennon", "born": 1940, "role": "guitar"},
+        {"first": "Ringo", "last": "Starr", "born": 1940, "role": "drums"},
+        {"first": "George", "last": "Martin", "born": 1926, "role": "producer"},
+    ]
+
+    assert db.query(_orderby=[db.Q.first, "born"]).all() == [
+        {"first": "George", "last": "Martin", "born": 1926, "role": "producer"},
+        {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
+        {"first": "John", "last": "Lennon", "born": 1940, "role": "guitar"},
+        {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
+        {"first": "Ringo", "last": "Starr", "born": 1940, "role": "drums"},
+    ]
+    assert db.query(_orderby=[db.Q.first, "-born"]).all() == [
+        {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
+        {"first": "George", "last": "Martin", "born": 1926, "role": "producer"},
+        {"first": "John", "last": "Lennon", "born": 1940, "role": "guitar"},
+        {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
+        {"first": "Ringo", "last": "Starr", "born": 1940, "role": "drums"},
+    ]
+    assert db.query(_orderby=[-db.Q.first, "-born"]).all() == [
+        {"first": "Ringo", "last": "Starr", "born": 1940, "role": "drums"},
+        {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
+        {"first": "John", "last": "Lennon", "born": 1940, "role": "guitar"},
+        {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
+        {"first": "George", "last": "Martin", "born": 1926, "role": "producer"},
+    ]
+
+    assert db.query(_orderby=["born", "-last"]).all() == [
+        {"first": "George", "last": "Martin", "born": 1926, "role": "producer"},
+        {"first": "Ringo", "last": "Starr", "born": 1940, "role": "drums"},
+        {"first": "John", "last": "Lennon", "born": 1940, "role": "guitar"},
+        {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
+        {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
+    ]
+
     # Add repeat items
     for item in items:
         item["new"] = True
@@ -522,7 +568,7 @@ def test_JSONLiteDB_adv():
 
 
 def test_JSONLiteDB_unicode():
-    db = JSONLiteDB(":memory:", table="uni")
+    db = JSONLiteDB.memory(table="uni")
     db.insert({"kéy": "vælů€", "k2": "val"})
     db.insert({"kéy": "vælůe", "k2": "vàl"})
     db.insert({"kéy": "vælu€", "k2": "vál"})
@@ -891,6 +937,67 @@ def test_query2sql():
     assert qvals == ["val1", "val2", "val3", "val4", "otherval4"]
 
 
+def test_build_orderby_pairs():
+    db = JSONLiteDB.memory()
+
+    tests = [
+        # Type 1
+        ("$.key", [("$.key", "ASC")]),
+        ("+$.key", [("$.key", "ASC")]),
+        ("-$.key", [("$.key", "DESC")]),
+        ("$.key.subkey", [("$.key.subkey", "ASC")]),
+        ("+$.key.subkey", [("$.key.subkey", "ASC")]),
+        ("-$.key.subkey", [("$.key.subkey", "DESC")]),
+        ("$.key.subkey[3]", [("$.key.subkey[3]", "ASC")]),
+        ("+$.key.subkey[3]", [("$.key.subkey[3]", "ASC")]),
+        ("-$.key.subkey[3]", [("$.key.subkey[3]", "DESC")]),
+        # Type 2
+        ("key", [('$."key"', "ASC")]),
+        ("+key", [('$."key"', "ASC")]),
+        ("-key", [('$."key"', "DESC")]),
+        # Type 3
+        (("key",), [('$."key"', "ASC")]),
+        (("+key",), [('$."key"', "ASC")]),
+        (("-key",), [('$."key"', "DESC")]),
+        (("key", "subkey"), [('$."key"."subkey"', "ASC")]),
+        (("+key", "subkey"), [('$."key"."subkey"', "ASC")]),
+        (("-key", "subkey"), [('$."key"."subkey"', "DESC")]),
+        (("key", "subkey", 3), [('$."key"."subkey"[3]', "ASC")]),
+        (("+key", "subkey", 3), [('$."key"."subkey"[3]', "ASC")]),
+        (("-key", "subkey", 3), [('$."key"."subkey"[3]', "DESC")]),
+        # Type 4
+        (db.Q.key, [('$."key"', "ASC")]),
+        (+db.Q.key, [('$."key"', "ASC")]),
+        (-db.Q.key, [('$."key"', "DESC")]),
+        (db.Q.key.subkey, [('$."key"."subkey"', "ASC")]),
+        (+db.Q.key.subkey, [('$."key"."subkey"', "ASC")]),
+        (-db.Q.key.subkey, [('$."key"."subkey"', "DESC")]),
+        (db.Q.key.subkey[3], [('$."key"."subkey"[3]', "ASC")]),
+        (+db.Q.key.subkey[3], [('$."key"."subkey"[3]', "ASC")]),
+        (-db.Q.key.subkey[3], [('$."key"."subkey"[3]', "DESC")]),
+        # Special cases
+        ((4,), [("$[4]", "ASC")]),
+        ((-4,), [("$[-4]", "ASC")]),  # Note that this does not reverse direction
+        (db.Q[4], [("$[4]", "ASC")]),
+        (db.Q[-4], [("$[-4]", "ASC")]),
+        (-db.Q[4], [("$[4]", "DESC")]),  # This DOES reverse
+        (-db.Q[-4], [("$[-4]", "DESC")]),  # this DOES reverse
+    ]
+
+    for input_value, expected in tests:
+        assert jsonlitedb.build_orderby_pairs(input_value) == expected
+
+    # Catch edge cases
+    assert jsonlitedb.build_orderby_pairs(None) == ""
+
+    with pytest.raises(ValueError):
+        jsonlitedb.build_orderby_pairs(db.Q.key == "val")
+    with pytest.raises(ValueError):
+        jsonlitedb.build_orderby_pairs([tuple()])
+    with pytest.raises(ValueError):
+        jsonlitedb.build_orderby_pairs(object())
+
+
 def test_split_query():
     assert (
         ("a",)
@@ -966,36 +1073,40 @@ def test_listify():
     assert jsonlitedb.listify(l) == l
     assert jsonlitedb.listify(l) is l
 
+    assert jsonlitedb.listify((1, 2)) == [1, 2]
+    assert jsonlitedb.listify((1, 2), expand_tuples=True) == [1, 2]
+    assert jsonlitedb.listify((1, 2), expand_tuples=False) == [(1, 2)]
 
-def test_group_ints_with_preceeding_string():
-    assert jsonlitedb.group_ints_with_preceeding_string([1, 2]) == [[1, 2]]
-    assert jsonlitedb.group_ints_with_preceeding_string(["a", "b"]) == [["a"], ["b"]]
-    assert jsonlitedb.group_ints_with_preceeding_string(["a", 1, 2, 3, "b"]) == [
+
+def test_group_ints_with_preceding_string():
+    assert jsonlitedb.group_ints_with_preceding_string([1, 2]) == [[1, 2]]
+    assert jsonlitedb.group_ints_with_preceding_string(["a", "b"]) == [["a"], ["b"]]
+    assert jsonlitedb.group_ints_with_preceding_string(["a", 1, 2, 3, "b"]) == [
         ["a", 1, 2, 3],
         ["b"],
     ]
-    assert jsonlitedb.group_ints_with_preceeding_string([1, 2, 3, "b"]) == [
+    assert jsonlitedb.group_ints_with_preceding_string([1, 2, 3, "b"]) == [
         [1, 2, 3],
         ["b"],
     ]
-    assert jsonlitedb.group_ints_with_preceeding_string(["a", "b", 1, 2, "3", 4]) == [
+    assert jsonlitedb.group_ints_with_preceding_string(["a", "b", 1, 2, "3", 4]) == [
         ["a"],
         ["b", 1, 2],
         ["3", 4],
     ]
     # Example ones
-    assert jsonlitedb.group_ints_with_preceeding_string
-    assert jsonlitedb.group_ints_with_preceeding_string(["A", "B", "C"]) == [
+    assert jsonlitedb.group_ints_with_preceding_string
+    assert jsonlitedb.group_ints_with_preceding_string(["A", "B", "C"]) == [
         ["A"],
         ["B"],
         ["C"],
     ]  # Nothing
-    assert jsonlitedb.group_ints_with_preceeding_string(["A", 1, "B", 2, 3, "C"]) == [
+    assert jsonlitedb.group_ints_with_preceding_string(["A", 1, "B", 2, 3, "C"]) == [
         ["A", 1],
         ["B", 2, 3],
         ["C"],
     ]
-    assert jsonlitedb.group_ints_with_preceeding_string([1, 2, "A", "B", 3]) == [
+    assert jsonlitedb.group_ints_with_preceding_string([1, 2, "A", "B", 3]) == [
         [1, 2],
         ["A"],
         ["B", 3],
@@ -1198,10 +1309,11 @@ if __name__ == "__main__":  # pragma: no cover
     test_query_args()
     test_build_index_paths()
     test_query2sql()
+    test_build_orderby_pairs()
     test_split_query()
     test_Row()
     test_listify()
-    test_group_ints_with_preceeding_string()
+    test_group_ints_with_preceding_string()
     test_sqlite_quote()
     test_split_no_double_quotes()
     test_non_dicts()

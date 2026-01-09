@@ -2,7 +2,7 @@
 
 SQLite3-backed JSON document database with support for indices and advanced queries.
 
-<!-- ![logo](logo.svg) -->
+<img src="logo.svg" alt="Logo" height="250" />
 
 ![100% Coverage][100%]
 
@@ -15,12 +15,8 @@ JSONLiteDB provides an easy API with no need to load the entire database into me
 Similar tools and inspiration:
 
 - [TinyDB](https://github.com/msiemens/tinydb). The API and process of TinyDB heavily inspired JSONLiteDB. But TinyDB reads the entire JSON DB into memory and needs to dump the entire database upon insertion. Hardly efficient or scalable and still queries at O(N).
-
 - [Dataset](https://github.com/pudo/dataset) is promising but creates new columns for every key and is very "heavy" with its dependencies. As far as I can tell, there is no native way to support multi-column and/or unique indexes. But still, a very promising tool!
-
-- [KenobiDB](https://github.com/patx/kenobi). Came out while JSONLiteDB was in development. Similar idea with different design decisions. Does not directly support advanced queries indexes (which can *greatly* accelerate queries!). 
-    - Please correct me if I am wrong. I new to this tool.
-
+- [KenobiDB](https://github.com/patx/kenobi). Came out while JSONLiteDB was in development. Similar idea with different design decisions. Does not directly support advanced queries indexes which can *greatly* accelerate queries! (Please correct me if I am wrong. I new to this tool)
 - [DictTable](https://github.com/Jwink3101/dicttable) (also written by me) is nice but entirely in-memory and not always efficient for non-equality queries.
 
 ## Install
@@ -56,7 +52,7 @@ With some fake data.
 
 Insert some data. Can use `insert()` with any number of items or `insertmany()` with an iterable (`insertmany([...]) <--> insert(*[...])`).
 
-Can also use a context manager (`with db: ...`)to batch the insertions (or deletions).
+Can also use a context manager (`with db: ...`) to batch the insertions (or deletions).
 
 
 ```python
@@ -267,6 +263,56 @@ In addition they support
 
 
 
+### Sorting / Ordering
+
+JSONLiteDB supports `_orderby` on `query()` (and those that wrap it) and `query_by_path_exists()` (see Advanced Usage)
+
+The input is effectively the same as those for a query but (a) do not have values assigned and (b) can take "+" (ascending,default) or "-" (descending) construction. See the help for `query()` for more details including how it is used with the different forms
+
+
+```python
+>>> db.query(db.Q.first == "George").all()
+```
+
+
+
+
+    [{'first': 'George', 'last': 'Harrison', 'born': 1943, 'role': 'guitar'},
+     {'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'}]
+
+
+
+
+```python
+>>> db.query(db.Q.first == "George", _orderby="-role").all()
+```
+
+
+
+
+    [{'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'},
+     {'first': 'George', 'last': 'Harrison', 'born': 1943, 'role': 'guitar'}]
+
+
+
+
+```python
+>>> db.query(_orderby=[-db.Q.role, db.Q.last]).all()
+```
+
+
+
+
+    [{'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'},
+     {'first': 'George', 'last': 'Harrison', 'born': 1943, 'role': 'guitar'},
+     {'first': 'John', 'last': 'Lennon', 'born': 1940, 'role': 'guitar'},
+     {'first': 'Ringo', 'last': 'Starr', 'born': 1940, 'role': 'drums'},
+     {'first': 'Paul', 'last': 'McCartney', 'born': 1942, 'role': 'bass'}]
+
+
+
+You can sort by subkeys and subelements as well with a similar syntax to queries. See `query()` for more details.
+
 ### Speeding up queries
 
 Queries can be **greatly accelerated** with an index. Note that SQLite is *extremely* picky about how you write the index! For the most part, if you the same method to query as write the index, you will be fine. (This is more of an issue with nested queries and *advanced* formulating of the query).
@@ -465,15 +511,32 @@ It can also dump a database to JSONL.
 
 ## Known Limitations
 
-- Dictionary keys must be strings without a dot, double quote, square bracket, and may not start with `_`. (Some of these may work but could have unexpected outcomes.)   
+- Dictionary keys must be strings without a dot, double quote, square bracket, and may not start with `_`. Some of these may work but could have unexpected outcomes.
+- Functionally identical queries may not match for an index because SQLite is *extremely strict* about the pattern. Mitigate by using the same query mechanics for index creation and query. 
 - There is no distinction made between an entry having a key with a value of `None` vs. not having the key. However, you can use `query_by_path_exists()` to query items that have a certain path. There is no way still to mix this with other queries testing existence other than with `None`.  
-- While it will accept items like strings as a single item, queries on these do not work reliably.
+- While it will accept non-dict items like strings, lists, and tuples as a single item, queries on these do not work reliably.
 
 ## FAQs
 
 ### Wouldn't it be better to use different SQL columns rather than all as JSON?
 
 Yes and no. The idea is the complete lack of schema needed and as a notable improvement to a JSON file. Plus, if you index the field of interest, you get super-fast queries all the same!
+
+### Aren't there other embedded object databases that are purpose built rather than on top of SQLite?
+
+Yes! The idea is simplicity and compatibility. SQLite basically runs everywhere and is widely accepted. It is only a slight step down from JSON Lines in being future proof. 
+
+### When using `duplicates='replace'`, it essentially deletes and inserts the item rather than replacing it for real (and keeping the `rowid` internally). Is that intended?
+
+Mostly yes. The alternative was considered but this behavior more closely matches the mental model of the tool.
+
+### What if I need more advanced manipulation?
+
+JSONLiteDB provides a lot of functionality between queries and sorting but if you need more, just run on the database directly yourself!
+
+### Can I use a custom encoder?
+
+Yes and no. You can use your own methods to encode the object you insert but since it uses SQLite's `JSON1`, it must be JSON that gets stored.
 
 <!-- From https://github.com/dwyl/repo-badges -->  
 [100%]:https://img.shields.io/codecov/c/github/dwyl/hapi-auth-jwt2.svg

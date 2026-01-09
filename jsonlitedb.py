@@ -19,7 +19,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.1.8"
+__version__ = "0.1.9"
 
 __all__ = ["JSONLiteDB", "Q", "Query", "sqlite_quote", "Row"]
 
@@ -149,6 +149,25 @@ class JSONLiteDB:
         kwargs["uri"] = True
         return cls(dbpath, **kwargs)
 
+    @classmethod
+    def memory(cls, **kwargs):
+        """
+        Create an in-memory JSONLiteDB instance. Shortcut For
+            JSONLiteDB(":memory:",**kwargs)
+        where **kwargs can contain both JSONLiteDB and sqlite3 kwargs
+
+        Parameters:
+        -----------
+        **kwargs : keyword arguments
+            Additional keyword arguments for JSONLiteDB and sqlite3.
+
+        Returns:
+        --------
+        JSONLiteDB
+            A new instance of JSONLiteDB in memory.
+        """
+        return cls(":memory:", **kwargs)
+
     def insert(self, *items, duplicates=False, _dump=True):
         """
         Insert one or more JSON items into the database.
@@ -275,9 +294,13 @@ class JSONLiteDB:
             Determines whether to load the result as JSON objects. Defaults to True.
 
         _limit : int, optional
-            Adds a "LIMIT <N>" statement to the query. Useful to speed up results. Note
+            Adds a "LIMIT <N>" statement to the query. Useful to speed up queries. Note
             that will always still return the iterator. See query_one() for a method that
-            returns the first item
+            returns just the first item
+
+        _orderby: str, tuples, Query objects
+            Specify how to order the results. If not specified, no ordering is
+            requested. See "Order By" below.
 
         Returns:
         --------
@@ -365,10 +388,67 @@ class JSONLiteDB:
             be the same!
 
         db.query() is also aliased to db() and db.search()
+
+        Order By:
+        ---------
+        Specify how to order the results with an SQL ORDER BY clause.
+
+        Much like query, but without the comparison (e.g. equality), it can take a few
+        forms. The biggest difference is that a "-" or "+" be proceed it to specify order
+
+        1. String starting with "$" and follows SQLite's JSON path. Must properly quote
+           if it has dots, etc. No additional quoting is performed. A preceding - mean
+           DESC and + means ASC but isn't needed
+
+           >>> "$.key"
+           >>> "$.key.subkey"
+           >>> "$.key.subkey[3]"
+
+           >>> "-$.key"
+           >>> "-$.key.subkey"
+           >>> "-$.key.subkey[3]"
+
+        2. String without '$' meaning it will be escaped and quoted. ADD NEG DESC
+
+           >>> "key"
+           >>> "-key"
+
+        3. Tuple string-keys or integer items. The quoting will be handled for you. The
+           first, and only the first, item can have a "-" in front to set the orderby
+
+            >>> ('key',)
+            >>> ('key','subkey')
+            >>> ('key','subkey',3)
+
+            >>> ('-key',)
+            >>> ('-key','subkey')
+            >>> ('-key','subkey',3)
+
+            WARNING: It must be a tuple as a list will infer multiple items.
+            WARNING: Only the first item may be +/-
+
+        4. Advanced queries via query objects. Similar to above but without comparison
+
+           >>> db.Q.key
+           >>> db.Q.key.subkey
+           >>> db.Q.key.subkey[3]
+
+           >>> -db.Q.key
+           >>> -db.Q.key.subkey
+           >>> -db.Q.key.subkey[3]
+
+        You can also specify a list of items to set the order
+
+            ["-key1", "db.Q.key2", ('-key3','subkey')]
+
+        A preceding + is ASC (default) and a - is DESC. A - can only be on the first
+        item in a tuple or before the '$' if given a string
         """
         _load = query_kwargs.pop("_load", True)
         _limit = query_kwargs.pop("_limit", None)
+        _orderby = query_kwargs.pop("_orderby", None)
 
+        order = self._orderby2sql(_orderby)
         limit = f"LIMIT {_limit:d}" if _limit else ""
 
         qstr, qvals = JSONLiteDB._query2sql(*query_args, **query_kwargs)
@@ -377,6 +457,7 @@ class JSONLiteDB:
             SELECT rowid, data FROM {self.table} 
             WHERE
                 {qstr}
+            {order}
             {limit}
             """,
             qvals,
@@ -428,7 +509,7 @@ class JSONLiteDB:
     def count(self, *query_args, **query_kwargs):
         """
         Count the number of items matching the query criteria. This uses SQLite to
-        count and is faster than counting the items in a query.
+        count and is faster than counting the items returned in a query.
 
         Parameters:
         -----------
@@ -461,7 +542,7 @@ class JSONLiteDB:
         ).fetchone()
         return res[0]
 
-    def query_by_path_exists(self, path, _load=True):
+    def query_by_path_exists(self, path, _load=True, _orderby=None):
         """
         Return items iterator over items whos path exist. Paths can be nested
         and take the usual possible four forms (single-key string, SQLite
@@ -481,6 +562,9 @@ class JSONLiteDB:
 
         _load : bool, optional
             Determines whether to load the result as JSON objects. Defaults to True.
+
+        _orderby
+            How to order the results. See query() for details
 
         Returns:
         --------
@@ -512,6 +596,8 @@ class JSONLiteDB:
 
         parent = build_index_paths(parent)[0]
 
+        order = self._orderby2sql(_orderby)
+
         res = self.execute(
             f"""
             SELECT DISTINCT
@@ -525,6 +611,7 @@ class JSONLiteDB:
                 JSON_EACH({self.table}.data,?) as each
             WHERE
                 each.key = ?
+            {order}
             """,
             (parent, child),
         )
@@ -576,8 +663,8 @@ class JSONLiteDB:
         path = build_index_paths(path)[0]  # Always just one
         res = self.execute(
             f"""
-            SELECT {function}(JSON_EXTRACT({self.table}.data, {sqlite_quote(path)})) AS val
-            FROM {self.table}
+            SELECT {function}(JSON_EXTRACT({self.table}.data, {sqlite_quote(path)})) 
+            AS val FROM {self.table}
             """
         )
 
@@ -592,6 +679,9 @@ class JSONLiteDB:
 
     def _explain_query(self, *query_args, **query_kwargs):
         """Explain the query. Used for testing"""
+        _orderby = query_kwargs.pop("_orderby", None)
+        order = self._orderby2sql(_orderby)
+
         qstr, qvals = JSONLiteDB._query2sql(*query_args, **query_kwargs)
 
         res = self.execute(
@@ -600,6 +690,7 @@ class JSONLiteDB:
             SELECT data FROM {self.table} 
             WHERE
                 {qstr}
+            {order}
             """,
             qvals,
         )
@@ -803,7 +894,7 @@ class JSONLiteDB:
         ----------
         rowid : int
             The rowid of the item to retrieve. Must correspond to a valid SQLite rowid
-            (note that rowids start at 1).
+            (NOTE: rowids start at 1).
 
         Returns
         -------
@@ -945,21 +1036,23 @@ class JSONLiteDB:
 
     def patch(self, patchitem, *query_args, **query_kwargs):
         """
-        Apply a patch to all items matching the specified query criteria.
+        Apply a patch to all items matching the optionally specified query criteria.
 
         Parameters:
         -----------
         patchitem : dict
-            The patch to apply. Follows the RFC-7396 MergePatch algorithm.
+            The patch to apply. Follows the RFC-7396 [2] MergePatch algorithm.
             Note: Setting a key's value to None removes that key from the object.
 
         *query_args : positional arguments
             Arguments can be dictionaries of equality key:value pairs or advanced
-            queries. Multiple are combined with AND logic.
+            queries. Multiple are combined with AND logic. Note, if no query args or
+            keywords are specified, will apply to all!
 
         **query_kwargs : keyword arguments
-            Keywords that represent equality conditions. Multiple are combined with
-            AND logic.
+            Keywords that represent equality conditions of key=value. Multiple are
+            combined with AND logic. Note, if no query args or keywords are specified,
+            will apply to all!
 
         _dump : bool, optional
             If True (default), converts the patch item to a JSON string before applying.
@@ -992,12 +1085,13 @@ class JSONLiteDB:
         Limitations:
         -----------
         Because `None` is the keyword to remove the field, it cannot be used to set
-        the value to None. This is an SQLite limitation. If this is needed, use a Python
-        loop.
+        the value to None. This is an SQLite (and RFC 7396) limitation. If this is
+        needed, use a Python loop.
 
         References:
         -----------
         [1]: https://www.sqlite.org/json1.html#jpatch
+        [2]: https://datatracker.ietf.org/doc/html/rfc7396
         """
         _dump = query_kwargs.pop("_dump", True)
 
@@ -1014,7 +1108,7 @@ class JSONLiteDB:
                 WHERE
                     {qstr}
                 """,
-                [patchitem, *qvals],
+                (patchitem, *qvals),
             )
 
     def path_counts(self, start=None):
@@ -1070,6 +1164,8 @@ class JSONLiteDB:
         counts = {row["key"]: row["count"] for row in res}
         counts.pop(None, None)  # do not include nothing
         return counts
+
+    key_counts = path_counts
 
     def keys(self, start=None):
         """
@@ -1242,7 +1338,7 @@ class JSONLiteDB:
             WHERE 
                 type='index' AND tbl_name = ?
             ORDER BY rootpage""",
-            [self.table],
+            (self.table,),
         )
         indres = {}
         for row in res:
@@ -1294,6 +1390,7 @@ class JSONLiteDB:
                 )"""
                 )
             )
+            # 'key' is PRIMARY KEY so it will be ignored if already there.
             db.execute(
                 dedent(
                     f"""
@@ -1352,12 +1449,31 @@ class JSONLiteDB:
         if not qobj._query:
             raise MissingValueError("Must set an (in)equality for query")
 
-        # Neet to replace all placeholders with '?' but we also need to do it in the proper order
+        # Neet to replace all placeholders with '?' but we also need to do
+        # it in the proper order. May move to named (dict) style in the future but
+        # this works well enough.
         reQ = re.compile(r"(!>>.*?<<!)")
         qvals = reQ.findall(qobj._query)
         qvals = [qobj._qdict[k] for k in qvals]
         qstr = reQ.sub("?", qobj._query)
         return qstr, qvals
+
+    def _orderby2sql(self, orderby):
+        """
+        Turns orderby into SQL
+        """
+        # JSON_EXTRACT(data, {sqlite_quote(path)})
+        if not orderby:
+            return ""
+        pairs = build_orderby_pairs(orderby)
+        out = []
+        for path, order in pairs:
+            out.append(
+                " " * 14  # The indent isn't needed but it looks nicer
+                + f"JSON_EXTRACT({self.table}.data, {sqlite_quote(path)}) {order}"
+            )
+
+        return "ORDER BY\n" + ",\n".join(out)
 
     @property
     def Query(self):
@@ -1604,6 +1720,7 @@ class Query:
         self._key = []
         self._qdict = {}
         self._query = None  # Only gets set upon comparison or _from_equality
+        self._asc_or_desc = None
 
     @staticmethod
     def _from_equality(k, v):
@@ -1696,6 +1813,15 @@ class Query:
         self._query = f"( NOT {self._query} )"
         return self
 
+    # for ORDER BY
+    def __neg__(self):
+        self._asc_or_desc = "DESC"
+        return self
+
+    def __pos__(self):
+        self._asc_or_desc = "ASC"
+        return self
+
     def __str__(self):
         qdict = self._qdict
         if qdict or self._query:
@@ -1761,7 +1887,7 @@ def _query_tuple2jsonpath(*args, **kwargs):
             raise ValueError(f"Unsuported key type for: {key!r}")
 
         # Need to combine but allow for integers including the first one
-        key = group_ints_with_preceeding_string(key)
+        key = group_ints_with_preceding_string(key)
         if key and isinstance(key[0][0], int):
             newkey = ["$" + "".join(f"[{i:d}]" for i in key[0])]
             del key[0]
@@ -1780,7 +1906,24 @@ class AssignedQueryError(ValueError):
     pass
 
 
-def build_index_paths(*args, **kwargs):
+def build_index_paths(*args):
+    """
+    Turn strings, tuple of strings, or query objects into the JSON path.
+
+        build_index_paths('key') --> ['$."key"']
+
+        build_index_paths('key1','key2') --> ['$."key1"', '$."key2"']
+
+        build_index_paths(('key1','key2')) --> ['$."key1"."key2"']
+        build_index_paths(db.Q.key1.key2) --> ['$."key1"."key2"']
+
+    Multiple items are joined. That is
+        build_index_paths('key1','key2') == [
+            build_index_paths('key1')[0],
+            build_index_paths('key2')[0]
+        ]
+    """
+
     paths = []
 
     # Arguments. w/ or w/o values
@@ -1799,8 +1942,73 @@ def build_index_paths(*args, **kwargs):
         path = list(arg)[0]
         paths.append(path)
 
-    paths.extend(_query_tuple2jsonpath(kwargs).keys())
+    # This removes equality but it really shouldn't be there for path building
+    # paths.extend(_query_tuple2jsonpath(kwargs).keys())
     return paths
+
+
+def build_orderby_pairs(orderby):
+    """
+    Turns orderby (JSON Path, ORDER) pairs
+    """
+    if not orderby:
+        return ""
+
+    if not isinstance(orderby, list):
+        orderby = [orderby]
+
+    orders = []
+    for item in orderby:
+        order = "ASC"
+
+        # Handle type 4 first because will turn it unto a type 3. Set 'order' here
+        # since type 3 only resets it if there is a + or -
+        if isinstance(item, Query):
+            if item._query:
+                raise AssignedQueryError(
+                    "Cannot index an assigned query. Example: 'db.Q.key' is acceptable "
+                    "but 'db.Q.key == val' is NOT"
+                )
+            order = item._asc_or_desc or order  # default to ASC
+            item = tuple(item._key)
+
+        if isinstance(item, str):  # type 1 or 2
+            if item.startswith("-"):
+                order = "DESC"
+                item = item[1:]
+            elif item.startswith("+"):
+                item = item[1:]
+
+            if not item.startswith("$"):
+                item = f'$."{item}"'
+            orders.append((item, order))
+
+        elif isinstance(item, tuple):  # type 3
+            if len(item) == 0:
+                raise ValueError("Cannot have an empty tuple for ordering")
+
+            if isinstance(item[0], str):
+                if item[0].startswith("-"):
+                    order = "DESC"
+                    item = (item[0][1:], *item[1:])
+                elif item[0].startswith("+"):
+                    item = (item[0][1:], *item[1:])
+
+            item = group_ints_with_preceding_string(item)
+            if item and isinstance(item[0][0], int):
+                newitem = ["$" + "".join(f"[{i:d}]" for i in item[0])]
+                del item[0]
+            else:
+                newitem = ["$"]
+
+            for itemgroup in item:
+                sitem, *ints = itemgroup
+                newitem.append(f'"{sitem}"' + "".join(f"[{i:d}]" for i in ints))
+
+            orders.append((".".join(newitem), order))
+        else:
+            raise ValueError("Unrecognized item for ORDER BY")
+    return orders
 
 
 def split_query(path):
@@ -1839,10 +2047,33 @@ def split_query(path):
 ###################################################
 class Row(sqlite3.Row):
     """
-    Fancier but performant sqlite3 row. Note that there is a subtle incompatibility
-    with this in PyPy. For JSONLiteDB, that is only exploited in unit tests and not
-    elsewhere so this continues to work just fine. See the unit test of this code
-    for details.
+    Extended SQLite row with dictionary-like helpers.
+
+    This class subclasses :class:`sqlite3.Row` to provide convenience
+    methods commonly found on dictionaries, such as ``items()``,
+    ``values()``, and ``get()``, while preserving the performance and
+    memory characteristics of SQLite's native row object.
+
+    Notes
+    -----
+    - Column access is performed via ``self[key]`` and remains backed by
+      the underlying SQLite row representation.
+    - Conversion to a Python ``dict`` is performed only when explicitly
+      requested via ``todict()``.
+    - A subtle incompatibility exists with PyPy's handling of
+      ``sqlite3.Row``. In this codebase, it is only exercised in unit
+      tests and does not affect runtime usage.
+
+    Methods
+    -------
+    todict()
+        Return the row as a dictionary mapping column names to values.
+    items()
+        Yield ``(key, value)`` pairs for each column.
+    values()
+        Yield values for each column.
+    get(key, default=None)
+        Return the value for `key` if present, otherwise `default`.
     """
 
     def todict(self):
@@ -1859,7 +2090,7 @@ class Row(sqlite3.Row):
     def get(self, key, default=None):
         try:
             return self[key]
-        except:
+        except Exception:
             return default
 
     def __str__(self):
@@ -1868,57 +2099,166 @@ class Row(sqlite3.Row):
     __repr__ = __str__
 
 
-def listify(flags):
-    """Turn argument into a list. None or False-like become empty list"""
-    if isinstance(flags, list):
-        return flags
-    flags = flags or []
-    if isinstance(flags, str):
-        flags = [flags]
-    return list(flags)
-
-
-def group_ints_with_preceeding_string(seq):
+def listify(items, expand_tuples=True):
     """
-    Group a seq into list of items where any following integers are also grouped.
-    Includes support for initial
-        ['A','B','C'] | [['A'], ['B'], ['C']] # Nothing
-        ['A',1,'B',2,3,'C'] | [['A', 1], ['B', 2, 3], ['C']]
-        [1,2,'A','B',3] | [[1, 2], ['A'], ['B', 3]]
+    Normalize an input value into a list.
 
+    The input may be a list, a string, or an iterable. If `items` is
+    ``None`` or evaluates to ``False``, an empty list is returned. A
+    string is treated as a single item and wrapped in a list rather than
+    iterated character-by-character.
+
+    Parameters
+    ----------
+    items : list, str, iterable, or None
+        Value to be converted into a list.
+
+    expand_tuples : bool, optional (default True)
+        Whether to `list(items)` if `items` is a tuple
+
+    Returns
+    -------
+    list
+        A list representation of `items`.
+
+    Notes
+    -----
+    - If `items` is already a list, it is returned unchanged.
+    - If `items` is a string, it is wrapped in a one-element list.
+    - If `items` is ``None`` or evaluates to ``False``, an empty list is
+      returned.
+    - Other iterables are converted using ``list(items)``.
+
+    Examples
+    --------
+    >>> listify(None)
+    []
+
+    >>> listify("a")
+    ['a']
+
+    >>> listify(("a", "b"))
+    ['a', 'b']
+
+    >>> listify([])
+    []
     """
-    newseq = []
+    if isinstance(items, list):
+        return items
 
+    items = items or []
+
+    if isinstance(items, str):
+        items = [items]
+
+    if isinstance(items, tuple) and not expand_tuples:
+        items = [items]
+
+    return list(items)
+
+
+def group_ints_with_preceding_string(seq):
+    """
+    Group integers with the immediately preceding string.
+
+    The input sequence must contain only strings and integers. Each string
+    starts a new group, and any immediately following integers are included
+    in that group. Leading integers (those appearing before any string) form
+    their own group.
+
+    Parameters
+    ----------
+    seq : sequence of (str or int)
+        Input sequence containing only strings and integers.
+
+    Returns
+    -------
+    list of list
+        Grouped sequence where integers are associated with the most recent
+        preceding string.
+
+    Notes
+    -----
+    - Boolean values are not supported and must not appear in `seq`.
+    - The function does not attempt to coerce or validate types beyond
+      assuming the input contains only `str` and `int`.
+    - Leading integers are allowed and will be grouped together until the
+      first string is encountered.
+
+    Examples
+    --------
+    >>> group_ints_with_preceding_string(['A', 'B', 'C'])
+    [['A'], ['B'], ['C']]
+
+    >>> group_ints_with_preceding_string(['A', 1, 'B', 2, 3, 'C'])
+    [['A', 1], ['B', 2, 3], ['C']]
+
+    >>> group_ints_with_preceding_string([1, 2, 'A', 'B', 3])
+    [[1, 2], ['A'], ['B', 3]]
+    """
+    groups = []
     group = []
+
     for item in seq:
-        if isinstance(item, int):
+        if isinstance(item, int) and not isinstance(item, bool):
             group.append(item)
         else:
             if group:
-                newseq.append(group)
+                groups.append(group)
             group = [item]
 
-    # Add the last group if any
     if group:
-        newseq.append(group)
+        groups.append(group)
 
-    return newseq
+    return groups
 
 
 def sqlite_quote(text):
-    """A bit of a hack get sqlite escaped text"""
-    # You could do this with just a replace and add quotes but this puts the logic
-    # to the sqlite library and is presumably more robust and safe. This whole process
-    # is about (15.6 ± 0.101) µs last time I profiled it. Not worth improving further.
-    #
-    # Note: It is still better to use paramater substitution whenever possible. But
-    #       sqlite doesn't support them in JSON_EXTRACT and other functions so it
-    #       gets quoted for safety.
+    """
+    Return a SQLite-escaped SQL literal for a string.
+
+    This function delegates string quoting and escaping to SQLite itself
+    by executing a parameterized query and capturing the resulting SQL
+    via a trace callback. The returned value is a SQL literal suitable
+    for direct embedding in SQLite statements.
+
+    Parameters
+    ----------
+    text : str
+        Input string to be quoted for safe inclusion in SQLite SQL.
+
+    Returns
+    -------
+    str
+        SQLite-escaped SQL literal representing `text`, including
+        surrounding quotes.
+
+    Notes
+    -----
+    This function exists as a workaround for SQLite contexts where
+    parameter substitution is not supported (e.g., `JSON_EXTRACT`
+    and certain expressions). When parameter binding is available,
+    it should always be preferred.
+
+    Internally, the function:
+    - Creates an in-memory SQLite database
+    - Executes a parameterized `SELECT ?` query
+    - Captures the executed SQL via `set_trace_callback`
+    - Extracts the quoted literal emitted by SQLite
+
+    The overhead of this approach is approximately 15 microseconds per
+    call and is considered acceptable for correctness and safety.
+
+    This relies on SQLite implementation details and should be treated
+    as a pragmatic but non-idiomatic solution.
+    """
     quoted = io.StringIO()
+
     tempdb = sqlite3.connect(":memory:")
     tempdb.set_trace_callback(quoted.write)
     tempdb.execute("SELECT\n?", (text,))
-    quoted = "\n".join(quoted.getvalue().splitlines()[1:])
+
+    quoted = "\n".join(quoted.getvalue().splitlines()[1:])  # Allow for new lines
     return quoted
 
 
@@ -1936,6 +2276,29 @@ def split_no_double_quotes(s, delimiter):
 
 
 def randstr(N=16):
+    """
+    Generate a random URL-safe Base64-encoded string.
+
+    Parameters
+    ----------
+    N : int, optional
+        Number of random bytes to generate before Base64 encoding.
+        Default is 16.
+
+    Returns
+    -------
+    str
+        URL-safe Base64-encoded string generated from `N` random bytes.
+        The output length is approximately ``4/3 * N`` characters and
+        depends on the amount of padding removed during encoding.
+
+    Notes
+    -----
+    The function uses :func:`os.urandom` to generate cryptographically
+    secure random bytes. The bytes are encoded using URL-safe Base64
+    encoding and any trailing ``'='`` padding characters are removed,
+    so the resulting string length is not necessarily a multiple of 4.
+    """
     rb = os.urandom(N)
     return base64.urlsafe_b64encode(rb).rstrip(b"=").decode("ascii")
 

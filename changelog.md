@@ -2,6 +2,13 @@
 
 Newest on top
 
+## 0.1.9
+
+- Adds `_orderby` to `query()`, `query_by_path_exists()`, and related calls. Allows for complex ordering and ascending or descending. 
+- Adds `memory()` constructor as a shortcut for `:memory:`
+- Adds a couple of aliased commands such as `key_counts()` to `path_counts()` to match `keys()`, etc.
+- Cleans up documentation, fixes spelling errors, clarifies behavior of some internal but reusable utilities.
+
 ## 0.1.8
 
 - Added `_limit` to query and explained the advantage of `query()` vs `query_one()`

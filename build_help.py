@@ -3,7 +3,7 @@
 
 import shutil
 import subprocess
-import sys
+import sys, os
 
 import nbformat
 from nbconvert import MarkdownExporter
@@ -12,6 +12,8 @@ from nbconvert.preprocessors import ExecutePreprocessor
 import jsonlitedb
 
 md = ["<!--- Auto Generated -->", "<!--- DO NOT MODIFY. WILL NOT BE SAVED -->"]
+
+os.chdir(os.path.dirname(__file__))
 
 
 def run_replace_convert(file):
@@ -94,24 +96,24 @@ with open("readme.md", "r") as rmin, open(".readme.md.swp", "wt") as rmout:
 shutil.move(".readme.md.swp", "readme.md")
 
 ### Documentation for the objects
-
-# api = []
-# api += ["# API Documentation"]
-# api += ["Auto-generated documentation"]
-#
-# api += ["## JSONLiteDB"]
-# doc = subprocess.check_output(
-#     [sys.executable, "-m", "pydoc", "jsonlitedb.JSONLiteDB"]
-# ).decode()
-# api.append("```text\n" + doc + "```")
-#
-# api += ["## Query"]
-# doc = subprocess.check_output(
-#     [sys.executable, "-m", "pydoc", "jsonlitedb.Query"]
-# ).decode()
-# api.append("```text\n" + doc + "```")
-#
-#
-# with open(".api.md.swp", "wt") as fp:
-#     fp.write("\n\n".join(api))
-# shutil.move(".api.md.swp", "api.md")
+if False:
+    api = []
+    api += ["# API Documentation"]
+    api += ["Auto-generated documentation"]
+    
+    api += ["## JSONLiteDB"]
+    doc = subprocess.check_output(
+        [sys.executable, "-m", "pydoc", "jsonlitedb.JSONLiteDB"]
+    ).decode()
+    api.append("```text\n" + doc + "```")
+    
+    api += ["## Query"]
+    doc = subprocess.check_output(
+        [sys.executable, "-m", "pydoc", "jsonlitedb.Query"]
+    ).decode()
+    api.append("```text\n" + doc + "```")
+    
+    
+    with open(".api.md.swp", "wt") as fp:
+        fp.write("\n\n".join(api))
+    shutil.move(".api.md.swp", "api.md")
