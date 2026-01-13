@@ -19,9 +19,23 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.1.10"
+__version__ = "0.1.11"
 
-__all__ = ["JSONLiteDB", "Q", "Query", "sqlite_quote", "Row"]
+__all__ = [
+    "AssignedQueryError",
+    "DBDict",
+    "DBList",
+    "DissallowedError",
+    "JSONLiteDB",
+    "MissingRowIDError",
+    "MissingValueError",
+    "Q",
+    "Query",
+    "QueryResult",
+    "Row",
+    "cli",
+    "sqlite_quote",
+]
 
 if sys.version_info < (3, 8):  # pragma: no cover
     raise ImportError("Must use Python >= 3.8")
@@ -233,6 +247,59 @@ class JSONLiteDB:
                 """,
                 ins,
             )
+
+    def import_jsonl(self, path, duplicates=False):
+        """
+        Import JSON/JSONL data from a file into the database.
+
+        Parameters
+        ----------
+        path : str | Path
+            Input file path. Files ending in ``.json`` are parsed as full JSON.
+            All other files are treated as JSON Lines (one JSON value per line).
+        duplicates : bool | str, optional
+            Duplicate handling for unique indexes: False, True/"replace", or "ignore".
+
+        Examples
+        --------
+        >>> db.import_jsonl("data.jsonl")
+        >>> db.import_jsonl("data.json", duplicates="ignore")
+        """
+        path = str(path)
+        if path.lower().endswith(".json"):
+            with open(path, "rt") as fp:
+                data = json.load(fp)
+            if isinstance(data, list):
+                self.insertmany(data, duplicates=duplicates)
+            else:
+                self.insert(data, duplicates=duplicates)
+            return
+
+        with open(path, "rt") as fp:
+            lines = (line.strip() for line in fp)
+            lines = (line for line in lines if line not in "[]")
+            lines = (line.rstrip(",") for line in lines)
+            self.insertmany(lines, _dump=False, duplicates=duplicates)
+
+    def export_jsonl(self, path, mode="w"):
+        """
+        Export the table contents to JSON Lines.
+
+        Parameters
+        ----------
+        path : str | Path
+            Output file path.
+        mode : str, optional
+            File mode (default "w"). Use "a" to append.
+
+        Examples
+        --------
+        >>> db.export_jsonl("out.jsonl")
+        >>> db.export_jsonl("out.jsonl", mode="a")
+        """
+        with open(path, mode=f"{mode}t") as fp:
+            for line in self.items(_load=False):
+                fp.write(line + "\n")
 
     def query(self, *query_args, **query_kwargs):
         """
@@ -819,43 +886,67 @@ class JSONLiteDB:
 
     __iter__ = items
 
-    def update(self, item, rowid=None, duplicates=False, _dump=True):
+    def update(self, *items, rowid=None, duplicates=False, _dump=True):
         """
-        Replace a stored document by rowid.
+        Replace stored documents by rowid.
 
         Parameters
         ----------
-        item : dict | str
-            Replacement document or JSON string if `_dump=False`.
+        *items : dict | str | tuple
+            Replacement documents or JSON strings if `_dump=False`. Multiple
+            items may be passed positionally. Each item must carry a `rowid`
+            attribute or be a tuple of ``(item, rowid)``.
         rowid : int, optional
-            Rowid to update. If omitted, uses `item.rowid` if present.
+            Rowid to update for a single item. If omitted, uses `item.rowid`
+            when present. Not allowed when multiple items are provided.
         duplicates : bool | str, optional
             Handling for unique index conflicts (False, True/"replace", "ignore").
         _dump : bool, optional
-            JSON-encode `item` when True (default).
+            JSON-encode items when True (default).
 
         Raises
         ------
         MissingRowIDError
-            If `rowid` is not provided and cannot be inferred.
+            If a rowid is not provided and cannot be inferred.
         ValueError
             If `duplicates` is not in {True, False, "replace", "ignore"}.
 
         See Also
         --------
         patch
+        update_many
 
         Examples
         --------
         >>> db.update({"first": "George", "last": "Harrison"}, rowid=1)
         """
-        rowid = rowid or getattr(item, "rowid", None)  # rowid starts at 1
+        if not items:
+            return
 
-        if rowid is None:
-            raise MissingRowIDError("Must specify rowid if it can't be infered")
+        if rowid is not None and len(items) != 1:
+            raise MissingRowIDError("Cannot set rowid for multiple updates")
+
+        updates = []
+        for entry in items:
+            if isinstance(entry, tuple) and len(entry) == 2:
+                if rowid is not None:
+                    raise MissingRowIDError(
+                        "Cannot set rowid when item already provides one"
+                    )
+                item, item_rowid = entry
+            else:
+                item = entry
+                item_rowid = rowid or getattr(item, "rowid", None)  # rowid starts at 1
+
+            if item_rowid is None:
+                raise MissingRowIDError("Must specify rowid if it can't be infered")
+            updates.append((item, item_rowid))
 
         if _dump:
-            item = json.dumps(item, ensure_ascii=False)
+            updates = [
+                (json.dumps(item, ensure_ascii=False), item_rowid)
+                for item, item_rowid in updates
+            ]
 
         if not duplicates:
             rtxt = ""
@@ -867,7 +958,7 @@ class JSONLiteDB:
             raise ValueError('Replace must be in {True, False, "replace", "ignore"}')
 
         with self:
-            self.execute(
+            self.executemany(
                 f"""
                 UPDATE {rtxt} {self.table}
                 SET
@@ -875,8 +966,37 @@ class JSONLiteDB:
                 WHERE
                     rowid = ?
                 """,
-                (item, rowid),
+                updates,
             )
+
+    def update_many(self, items, duplicates=False, _dump=True):
+        """
+        Replace stored documents by rowid in bulk.
+
+        Parameters
+        ----------
+        items : iterable
+            Items to update. Each element can be either a document with a
+            ``rowid`` attribute, or a tuple of ``(item, rowid)``.
+        duplicates : bool | str, optional
+            Handling for unique index conflicts (False, True/"replace", "ignore").
+        _dump : bool, optional
+            JSON-encode items when True (default).
+
+        Raises
+        ------
+        MissingRowIDError
+            If a rowid is not provided and cannot be inferred.
+        ValueError
+            If `duplicates` is not in {True, False, "replace", "ignore"}.
+
+        Notes
+        -----
+        This is a thin wrapper around ``update(*items)``. You can also loop
+        with ``with db:`` and call ``update()`` to batch changes in a single
+        transaction.
+        """
+        return self.update(*listify(items), duplicates=duplicates, _dump=_dump)
 
     def patch(self, patchitem, *query_args, **query_kwargs):
         """
@@ -1110,6 +1230,30 @@ class JSONLiteDB:
         return indres
 
     indices = indexes
+
+    def stats(self):
+        """
+        Return basic table and storage statistics.
+
+        Returns
+        -------
+        dict
+            Dictionary with row count, index metadata, and SQLite page stats.
+        """
+        row_count = self.count()
+        page_size = self.execute("PRAGMA page_size").fetchone()[0]
+        page_count = self.execute("PRAGMA page_count").fetchone()[0]
+        freelist_count = self.execute("PRAGMA freelist_count").fetchone()[0]
+        return {
+            "dbpath": self.dbpath,
+            "table": self.table,
+            "rows": row_count,
+            "indexes": self.indexes,
+            "page_size": page_size,
+            "page_count": page_count,
+            "freelist_count": freelist_count,
+            "bytes": page_size * page_count,
+        }
 
     def about(self):
         """Return metadata (created timestamp and version) from the kv table."""

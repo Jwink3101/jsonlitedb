@@ -499,7 +499,7 @@ You can mix and match index or attribute for keys. The following are all **ident
 
 ## Command Line Tools
 
-JSONLiteDB also installs a tool called "jsonlitedb" that makes it easy to read JSONL and JSON files into a database. This is useful for converting existing databases or appending data.
+JSONLiteDB also installs a tool called "jsonlitedb" that makes it easy to read JSONL and JSON files into a database. This is useful for converting existing databases or appending data. The same workflow is available in the API via `db.import_jsonl(...)` and `db.export_jsonl(...)`.
 
     $ jsonlitedb insert mydb.db newfile.jsonl  
     $ cat newdata.jsonl | jsonlitedb insert mydb.db  

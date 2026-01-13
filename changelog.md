@@ -2,6 +2,15 @@
 
 Newest on top
 
+## 0.1.11 (2026-01-12)
+
+- Added `import_jsonl()` and `export_jsonl()` helpers to mirror CLI workflows.
+- Added `stats()` for quick row/index/page metadata.
+- Extended `update()` to accept `*items` and added `update_many()` as a thin wrapper.
+- Expanded public exports in `__all__`.
+
+Note, much of this was done with the help of ChatGPT and `codex` but all changes were reviewed, modified, and accepted.
+
 ## 0.1.10
 
 - Added query CLI subcommand with filtering, ordering (including nested paths), and limits.

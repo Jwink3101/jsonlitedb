@@ -660,6 +660,39 @@ def test_JSONLiteDB_updates():
     assert db.count(first="Ringo") == 0, "conflict should have been deleted"
 
 
+def test_JSONLiteDB_update_many():
+    items = [
+        {"first": "John", "last": "Lennon", "born": 1940, "role": "guitar"},
+        {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
+        {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
+    ]
+    db = JSONLiteDB(":memory:")
+    db.insertmany(items)
+
+    db.update()
+
+    rows = db.query(db.Q.role == "guitar").all()
+    for row in rows:
+        row["role"] = "strings"
+    db.update_many(rows)
+
+    assert db.count(role="guitar") == 0
+    assert db.count(role="strings") == 2
+
+    row = db.query_one(first="Paul")
+    db.update_many([(dict(row, role="keys"), row.rowid)])
+    assert db.query_one(first="Paul")["role"] == "keys"
+
+    with pytest.raises(MissingRowIDError):
+        db.update(dict(row, role="keys"), dict(row, role="keys"), rowid=row.rowid)
+
+    with pytest.raises(MissingRowIDError):
+        db.update((dict(row, role="keys"), row.rowid), rowid=row.rowid)
+
+    with pytest.raises(MissingRowIDError):
+        db.update_many([{"first": "Nope"}])
+
+
 def test_JSONLiteDB_query_results():
     db = JSONLiteDB(":memory:")
     items = [{"i": i} for i in range(10)]
@@ -684,6 +717,7 @@ def test_JSONLiteDB_query_results():
     assert res.fetchmany() == []
 
     assert list(db.query()) == db.query().fetchall() == list(db) == items
+    assert db.query().all() == items
 
     assert (
         {"i": 3}
@@ -725,6 +759,46 @@ def test_JSONLiteDB_patch():
     assert db.path_counts().get("role", -1) == 4  # Was removed
     assert db.count(first="Ringo") == 0
     assert db.count(first="Richard") == 1
+
+
+def test_JSONLiteDB_stats():
+    db = JSONLiteDB(":memory:")
+    db.insert({"a": 1}, {"a": 2})
+    db.create_index("a")
+
+    stats = db.stats()
+    assert stats["dbpath"] == ":memory:"
+    assert stats["table"] == "items"
+    assert stats["rows"] == 2
+    assert stats["indexes"] == db.indexes
+    assert stats["page_size"] > 0
+    assert stats["page_count"] >= 1
+    assert stats["bytes"] == stats["page_size"] * stats["page_count"]
+
+
+def test_JSONLiteDB_import_export_jsonl(tmp_path):
+    items = [{"a": 1}, {"a": 2}, {"a": 3}]
+    db = JSONLiteDB(":memory:")
+    db.insertmany(items)
+
+    jsonl_path = tmp_path / "data.jsonl"
+    db.export_jsonl(jsonl_path)
+
+    db2 = JSONLiteDB(":memory:")
+    db2.import_jsonl(jsonl_path)
+    assert list(db2) == items
+
+    json_path = tmp_path / "data.json"
+    json_path.write_text(json.dumps(items))
+    db3 = JSONLiteDB(":memory:")
+    db3.import_jsonl(json_path)
+    assert list(db3) == items
+
+    json_single_path = tmp_path / "single.json"
+    json_single_path.write_text(json.dumps({"a": 10}))
+    db4 = JSONLiteDB(":memory:")
+    db4.import_jsonl(json_single_path)
+    assert list(db4) == [{"a": 10}]
 
 
 def test_Query():
@@ -1393,8 +1467,11 @@ if __name__ == "__main__":  # pragma: no cover
     test_JSONLiteDB_adv()
     test_JSONLiteDB_unicode()
     test_JSONLiteDB_updates()
+    test_JSONLiteDB_update_many()
     test_JSONLiteDB_query_results()
     test_JSONLiteDB_patch()
+    test_JSONLiteDB_stats()
+    test_JSONLiteDB_import_export_jsonl()
     test_Query()
     test_query_args()
     test_build_index_paths()
