@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import contextlib
 import io
 import json
 import os
@@ -154,20 +155,21 @@ def test_JSONLiteDB_general():
         db.count(db.Q.new)
 
     ## Using indexes
-    assert db._explain_query({"last": "Starr"})[0]["detail"] == "SCAN mytable"
+    assert db.explain_query({"last": "Starr"})[0]["detail"] == "SCAN mytable"
+    assert db.analyze({"last": "Starr"}) == db.explain_query({"last": "Starr"})
 
     # Create an index of '$.last' but demonstrate this doesn't work
     # as expected because 'last' becomes '$."last"', not '$.last'
     db.create_index("$.last")
     assert db.indexes == {"ix_mytable_606e2153": ["$.last"]}
-    assert db._explain_query({"last": "Starr"})[0]["detail"] == "SCAN mytable"
+    assert db.explain_query({"last": "Starr"})[0]["detail"] == "SCAN mytable"
 
     db.drop_index_by_name("ix_mytable_606e2153")
     assert not db.indexes
 
     db.create_index("last")
     assert db.indexes == {"ix_mytable_1bd45eb5": ['$."last"']}
-    assert db._explain_query({"last": "Starr"})[0]["detail"].startswith(
+    assert db.explain_query({"last": "Starr"})[0]["detail"].startswith(
         "SEARCH mytable USING INDEX"
     )
     db.drop_index("last")
@@ -187,6 +189,7 @@ def test_JSONLiteDB_general():
 
     # rowid
     assert db.query_one({"last": "Starr"}).rowid == 4  # We never modified the order
+    assert db.find_one({"last": "Starr"}).rowid == 4
     assert (
         "Ringo"
         == db[4]["first"]
@@ -538,8 +541,10 @@ def test_JSONLiteDB_adv():
     assert [
         json.loads(r) for r in db.query_by_path_exists(db.Q.extra2, _load=False)
     ] == list(db.query_by_path_exists(db.Q.extra2))
+    assert db.count_by_path_exists(db.Q.extra2) == 1
 
     assert list(db.query_by_path_exists(db.Q.made.up.key)) == []
+    assert db.count_by_path_exists(db.Q.made.up.key) == 0
 
     # Nested. Look at second kid
     assert list(db.query_by_path_exists(db.Q.kids[1])) == [
@@ -565,6 +570,7 @@ def test_JSONLiteDB_adv():
 
     # No path means empty
     assert list(db.query_by_path_exists(None)) == []
+    assert db.count_by_path_exists(None) == 0
 
 
 def test_JSONLiteDB_unicode():
@@ -1266,9 +1272,24 @@ def test_cli():
 
         # json lines
         with open(file2, "wt") as fp:
-            print(json.dumps({"name": "test1", "key2": "jsonl", "ii": 6}), file=fp)
-            print(json.dumps({"name": "test7", "key2": "jsonl", "ii": 7}), file=fp)
-            print(json.dumps({"name": "test8", "key2": "jsonl", "ii": 8}), file=fp)
+            print(
+                json.dumps(
+                    {"name": "test1", "key2": "jsonl", "ii": 6, "meta": {"rank": 1}}
+                ),
+                file=fp,
+            )
+            print(
+                json.dumps(
+                    {"name": "test7", "key2": "jsonl", "ii": 7, "meta": {"rank": 7}}
+                ),
+                file=fp,
+            )
+            print(
+                json.dumps(
+                    {"name": "test8", "key2": "jsonl", "ii": 8, "meta": {"rank": 8}}
+                ),
+                file=fp,
+            )
 
         with MockArgv(
             ["insert", dbpath, file2, "--table", "cli", "--duplicates", "replace"],
@@ -1290,6 +1311,75 @@ def test_cli():
 
         with MockArgv(["dump", dbpath, "--sql", "--output", dump2], shift=1):
             cli()
+
+        query_out = io.StringIO()
+        with MockArgv(["query", dbpath, "--table", "cli", "name=test7"], shift=1):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        query_rows = [
+            json.loads(line) for line in query_out.getvalue().strip().splitlines()
+        ]
+        assert query_rows == [
+            {"name": "test7", "key2": "jsonl", "ii": 7, "meta": {"rank": 7}}
+        ]
+
+        query_out = io.StringIO()
+        with MockArgv(
+            [
+                "query",
+                dbpath,
+                "--table",
+                "cli",
+                "--orderby=-ii",
+                "--limit",
+                "2",
+                "key2=jsonl",
+            ],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        query_rows = [
+            json.loads(line) for line in query_out.getvalue().strip().splitlines()
+        ]
+        assert [row["ii"] for row in query_rows] == [8, 7]
+
+        query_out = io.StringIO()
+        with MockArgv(
+            [
+                "query",
+                dbpath,
+                "--table",
+                "cli",
+                "--orderby=-meta,rank",
+                "--limit",
+                "2",
+                "key2=jsonl",
+            ],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        query_rows = [
+            json.loads(line) for line in query_out.getvalue().strip().splitlines()
+        ]
+        assert [row["name"] for row in query_rows] == ["test8", "test7"]
+
+        query_out = io.StringIO()
+        with MockArgv(
+            ["query", dbpath, "--table", "cli", "$.meta.rank=7"],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        query_rows = [
+            json.loads(line) for line in query_out.getvalue().strip().splitlines()
+        ]
+        assert [row["name"] for row in query_rows] == ["test7"]
+
+        with MockArgv(["query", dbpath, "--table", "cli", "badfilter"], shift=1):
+            with pytest.raises(ValueError):
+                cli()
 
     finally:
         for item in Path(".").glob("!!!*"):

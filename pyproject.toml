@@ -1,2 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jsonlitedb"
+dynamic = ["version"]
+description = "SQLite3-backed JSON document database with support for indices and advanced queries"
+readme = { file = "readme.md", content-type = "text/markdown" }
+license = { file = "license" }
+authors = [
+    { name = "Justin Winokur", email = "Jwink3101@users.noreply.github.com" },
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+[project.urls]
+Homepage = "https://github.com/Jwink3101/jsonlitedb"
+Source = "https://github.com/Jwink3101/jsonlitedb"
+Issues = "https://github.com/Jwink3101/jsonlitedb/issues"
+
+[project.scripts]
+jsonlitedb = "jsonlitedb:cli"
+
+[tool.setuptools]
+py-modules = ["jsonlitedb"]
+
+[tool.setuptools.dynamic]
+version = { attr = "jsonlitedb.__version__" }
+
 [tool.isort]
 profile = "black"

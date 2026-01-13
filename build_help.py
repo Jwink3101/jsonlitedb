@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import os
 import shutil
 import subprocess
-import sys, os
+import sys
 
 import nbformat
 from nbconvert import MarkdownExporter
@@ -100,20 +101,19 @@ if False:
     api = []
     api += ["# API Documentation"]
     api += ["Auto-generated documentation"]
-    
+
     api += ["## JSONLiteDB"]
     doc = subprocess.check_output(
         [sys.executable, "-m", "pydoc", "jsonlitedb.JSONLiteDB"]
     ).decode()
     api.append("```text\n" + doc + "```")
-    
+
     api += ["## Query"]
     doc = subprocess.check_output(
         [sys.executable, "-m", "pydoc", "jsonlitedb.Query"]
     ).decode()
     api.append("```text\n" + doc + "```")
-    
-    
+
     with open(".api.md.swp", "wt") as fp:
         fp.write("\n\n".join(api))
     shutil.move(".api.md.swp", "api.md")

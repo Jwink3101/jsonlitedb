@@ -19,7 +19,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.1.9"
+__version__ = "0.1.10"
 
 __all__ = ["JSONLiteDB", "Q", "Query", "sqlite_quote", "Row"]
 
@@ -31,43 +31,41 @@ DEFAULT_TABLE = "items"
 
 class JSONLiteDB:
     """
-    JSON(Lines) SQLite Database. Simple SQLite3 backed JSON document database with
-    powerful queries and indexing.
+    SQLite-backed JSON document store with indexing and query helpers.
 
-    Initialize a JSONLiteDB instance.
+    JSONLiteDB stores documents as JSON in a single SQLite table (JSON1).
+    It provides a compact API for insertion, queries, and indexing without
+    loading the entire database into memory.
 
-    Parameters:
-    -----------
-    dbpath : str or Path or sqlite3.Connection
-        Path to the SQLite database file. Use ':memory:' for an in-memory database.
-        If given an sqlite3.Connection, will use that and ignore sqlitekws
-
+    Parameters
+    ----------
+    dbpath : str | Path | sqlite3.Connection
+        Path to the SQLite file. Use ':memory:' for an in-memory database.
+        If an existing sqlite3.Connection is provided, it is used directly
+        and any sqlite3 connection kwargs are ignored.
     wal_mode : bool, optional
-        Whether to use write-ahead-logging (WAL) mode. Defaults to True.
-        ADVANCED: Can also set this directly with the execute() method as needed.
-
+        Enable write-ahead logging. Defaults to True. You may also set
+        WAL mode manually using `execute()` if you need finer control.
     table : str, optional
-        Name of the database table to use. Defaults to 'items'.
-
+        Table name to store documents. Defaults to 'items'. The name is
+        sanitized to alphanumerics and underscores.
     **sqlitekws : keyword arguments
-        Additional keyword arguments passed to sqlite3.connect. See [1] for
-        more details.
+        Extra keyword arguments passed to `sqlite3.connect`.
 
-    Raises:
-    -------
+    Raises
+    ------
     sqlite3.Error
-        If there is an error connecting to the database.
+        If SQLite cannot open the database.
 
-    Examples:
-    ---------
-    >>> db = JSONLiteDB(':memory:')
-    >>> db = JSONLiteDB('my/database.db',table='Beatles')
-    >>> db = JSONLiteDB('data.db',check_same_thread=False)
+    Examples
+    --------
+    >>> db = JSONLiteDB(":memory:")
+    >>> db = JSONLiteDB("my/database.db", table="Beatles")
+    >>> db = JSONLiteDB("data.db", check_same_thread=False)
 
-    References:
-    -----------
-    [1] https://docs.python.org/3/library/sqlite3.html#module-functions
-
+    References
+    ----------
+    https://docs.python.org/3/library/sqlite3.html#module-functions
     """
 
     def __init__(
@@ -104,22 +102,17 @@ class JSONLiteDB:
     @classmethod
     def connect(cls, *args, **kwargs):
         """
-        Create and return a new JSONLiteDB connection.
+        Shortcut for `JSONLiteDB(...)`.
 
-        This is a class method that acts as a shortcut for __init__.
+        Parameters
+        ----------
+        *args, **kwargs
+            Passed through to `__init__`.
 
-        Parameters:
-        -----------
-        *args : positional arguments
-            Arguments to pass to the constructor.
-
-        **kwargs : keyword arguments
-            Keyword arguments to pass to the constructor.
-
-        Returns:
-        --------
+        Returns
+        -------
         JSONLiteDB
-            A new instance of JSONLiteDB.
+            New database instance.
         """
         return cls(*args, **kwargs)
 
@@ -128,22 +121,22 @@ class JSONLiteDB:
     @classmethod
     def read_only(cls, dbpath, **kwargs):
         """
-        Open a JSONLiteDB connection in read-only mode. Shortcut For
-            JSONLiteDB(f"file:{dbpath}?mode=ro",uri=True,**kwargs)
-        where **kwargs can contain both JSONLiteDB and sqlite3 kwargs
+        Open a database in read-only mode.
 
-        Parameters:
-        -----------
+        Equivalent to:
+        `JSONLiteDB(f"file:{dbpath}?mode=ro", uri=True, **kwargs)`.
+
+        Parameters
+        ----------
         dbpath : str
-            Path to the SQLite database file.
+            SQLite database path.
+        **kwargs : dict
+            JSONLiteDB and sqlite3 keyword arguments.
 
-        **kwargs : keyword arguments
-            Additional keyword arguments for JSONLiteDB and sqlite3.
-
-        Returns:
-        --------
+        Returns
+        -------
         JSONLiteDB
-            A new instance of JSONLiteDB in read-only mode.
+            Read-only database instance.
         """
         dbpath = f"file:{dbpath}?mode=ro"
         kwargs["uri"] = True
@@ -152,61 +145,43 @@ class JSONLiteDB:
     @classmethod
     def memory(cls, **kwargs):
         """
-        Create an in-memory JSONLiteDB instance. Shortcut For
-            JSONLiteDB(":memory:",**kwargs)
-        where **kwargs can contain both JSONLiteDB and sqlite3 kwargs
+        Create an in-memory database.
 
-        Parameters:
-        -----------
-        **kwargs : keyword arguments
-            Additional keyword arguments for JSONLiteDB and sqlite3.
-
-        Returns:
-        --------
-        JSONLiteDB
-            A new instance of JSONLiteDB in memory.
+        Equivalent to `JSONLiteDB(":memory:", **kwargs)`.
         """
         return cls(":memory:", **kwargs)
 
     def insert(self, *items, duplicates=False, _dump=True):
         """
-        Insert one or more JSON items into the database.
+        Insert one or more JSON documents.
 
-        Parameters:
-        -----------
-        *items : variable length argument list
-            Items to add to the database. Each item should be a dictionary representing
-            a JSON object.
-
-        duplicates : bool or str, optional
-            Specifies how to handle duplicate items if a unique index exists.
-            Options are:
-            - False (default): Raises an error if a duplicate is found.
-            - True or "replace": Replaces existing items that violate a unique index.
-            - "ignore": Ignores items that violate a unique index.
-
+        Parameters
+        ----------
+        *items : dict | str
+            Documents to insert. Use dict/list objects by default, or pass JSON
+            strings with `_dump=False`.
+        duplicates : bool | str, optional
+            How to handle unique index conflicts:
+            - False (default): raise an error on duplicates.
+            - True or "replace": replace existing rows.
+            - "ignore": skip rows that violate uniqueness.
         _dump : bool, optional
-            If True (default), converts items to JSON strings before insertion.
-            Set to False if the input is already a JSON string.
+            If True (default), JSON-encode items before insert.
 
-        Returns:
-        --------
-        None
-
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
-            If `duplicates` is not one of {True, False, "replace", "ignore"}.
+            If `duplicates` is not in {True, False, "replace", "ignore"}.
 
-        Examples:
-        ---------
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insert({'first': 'John', 'last': 'Lennon'})
-        >>> db.insert({'first': 'Paul', 'last': 'McCartney'}, duplicates='ignore')
+        Examples
+        --------
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insert({"first": "John", "last": "Lennon"})
+        >>> db.insert({"first": "Paul"}, duplicates="ignore")
 
-        See Also:
-        ---------
-        insertmany : Method for inserting a list of items.
+        See Also
+        --------
+        insertmany
         """
         return self.insertmany(items, duplicates=duplicates, _dump=_dump)
 
@@ -214,44 +189,27 @@ class JSONLiteDB:
 
     def insertmany(self, items, duplicates=False, _dump=True):
         """
-        Insert multiple JSON items into the database.
+        Insert an iterable of documents.
 
-        Parameters:
-        -----------
-        items : list
-            A list of items to add to the database. Each item should be a dictionary
-            representing a JSON object.
-
-        duplicates : bool or str, optional
-            Specifies how to handle duplicate items if a unique index exists.
-            Options are:
-            - False (default): Raises an error if a duplicate is found.
-            - True or "replace": Replaces existing items that violate a unique index.
-            - "ignore": Ignores items that violate a unique index.
-
+        Parameters
+        ----------
+        items : iterable
+            Documents to insert (dicts/lists) or JSON strings if `_dump=False`.
+        duplicates : bool | str, optional
+            Duplicate handling for unique indexes: False, True/"replace", or "ignore".
         _dump : bool, optional
-            If True (default), converts items to JSON strings before insertion.
-            Set to False if the input is already a JSON string.
+            JSON-encode items when True (default).
 
-        Returns:
-        --------
-        None
-
-        Raises:
-        -------
+        Raises
+        ------
         ValueError
-            If `duplicates` is not one of {True, False, "replace", "ignore"}.
+            If `duplicates` is not in {True, False, "replace", "ignore"}.
 
-        >>> db = JSONLiteDB(':memory:')
-        >>> items = [
-        ...     {'first': 'John', 'last': 'Lennon', 'birthdate': 1940},
-        ...     {'first': 'Paul', 'last': 'McCartney', 'birthdate': 1942},
-        ...     {'first': 'George', 'last': 'Harrison', 'birthdate': 1943}
-        ... ]
-        >>> db.insertmany(items, duplicates='ignore')
-
-        This will insert the list of JSON objects into the database, ignoring any
-        duplicates if a unique index constraint exists.
+        Examples
+        --------
+        >>> db = JSONLiteDB(":memory:")
+        >>> items = [{"first": "John"}, {"first": "Paul"}]
+        >>> db.insertmany(items, duplicates="ignore")
         """
         if not duplicates:
             rtxt = ""
@@ -278,171 +236,98 @@ class JSONLiteDB:
 
     def query(self, *query_args, **query_kwargs):
         """
-        Query the database for items matching specified criteria.
+        Query documents matching one or more criteria.
 
-        Parameters:
-        -----------
-        *query_args : positional arguments
-            Arguments can be dictionaries of equality key:value pairs or advanced
-            queries. Multiple are combined with AND logic. See "Query Forms" below.
+        Parameters
+        ----------
+        *query_args : dict | Query
+            Equality dictionaries or advanced Query objects. Multiple arguments
+            are combined with AND logic.
+        **query_kwargs : dict
+            Equality constraints expressed as keyword arguments.
 
-        **query_kwargs : keyword arguments
-            Keywords that represent equality conditions. Multiple are combined with
-            AND logic.
-
+        Other Parameters
+        ----------------
         _load : bool, optional
-            Determines whether to load the result as JSON objects. Defaults to True.
-
+            If True (default), return decoded JSON (DBDict/DBList). If False,
+            return raw JSON strings.
         _limit : int, optional
-            Adds a "LIMIT <N>" statement to the query. Useful to speed up queries. Note
-            that will always still return the iterator. See query_one() for a method that
-            returns just the first item
+            Add `LIMIT N` to the SQL query. The return type is still an iterator.
+        _orderby : str | tuple | Query | list, optional
+            Order-by specification. See "Order By" below.
 
-        _orderby: str, tuples, Query objects
-            Specify how to order the results. If not specified, no ordering is
-            requested. See "Order By" below.
-
-        Returns:
-        --------
+        Returns
+        -------
         QueryResult
-            An iterator of DBDict or DBList object, each representing a JSON object
-            in the database. DBDict and DBList are just like normal dicts or lists but
-            allow for the 'rowid' attribute.
+            Iterator over matching rows. Each row is a DBDict/DBList with a
+            `rowid` attribute when `_load=True`.
 
-        Examples:
-        ---------
-        >>> db.query(first='John', last='Lennon')
-        >>> db.query({'birthdate': 1940})
+        Examples
+        --------
+        >>> db.query(first="John", last="Lennon")
+        >>> db.query({"birthdate": 1940})
         >>> db.query((db.Q.first == "Paul") | (db.Q.first == "John"))
         >>> db.query((db.Q.first % "Geo%") & (db.Q.birthdate <= 1943))
 
-        See Also:
-        ---------
-        query_one : Method for querying a single item.
+        Query Forms
+        -----------
+        Keyword equality:
+        >>> db.query(key=val)
+        >>> db.query(key1=val1, key2=val2)  # AND
 
-        Query Forms:
-        ------------
-        Queries can take some of the following forms:
-          Keyword:
+        Equality dictionaries:
+        >>> db.query({"key": val})
+        >>> db.query({"key1": val1, "key2": val2})  # AND
+        >>> db.query({"key1": val1}, {"key2": val2})  # AND
 
-          >>> db.query(key=val)
-          >>> db.query(key1=val1,key2=val2) # AND
+        Nested keys via JSON path or tuples:
+        >>> {"$.key": "val"}
+        >>> {"$.key.subkey[3]": "val"}
+        >>> {("key", "subkey"): "val"}
+        >>> {("key", "subkey", 3): "val"}
 
-          Arguments:
+        Advanced Query objects:
+        >>> db.query(db.Q.key == val)
+        >>> db.query(db.Q["key"] == val)
+        >>> db.query(db.Q.key.subkey == val)
+        >>> db.query(db.Q["key", "subkey"] == val)
+        >>> db.query(db.Q.key.subkey[3] == val)
 
-          >>> db.query({'key':val})
+        Complex example:
+        >>> db.query((db.Q["other key", 9] >= 4) & (Q().key < 3))
 
-          >>> db.query({'key1':val1,'key2':val2}) # AND
-          >>> db.query({'key1':val1,},{'key2':val2}) # AND (same as above)
+        Operators supported: ==, !=, >, >=, <, <= plus:
+        - LIKE:  `db.Q.key % "pat%tern"`
+        - GLOB:  `db.Q.key * "glob*pattern"`
+        - REGEXP: `db.Q.key @ "regex.*"` (Python `re`)
 
-        Nested queries can be accomplished with arguments. The key can take
-        the following forms:
+        Notes
+        -----
+        - REGEXP uses Python's `re` and is often slower than LIKE/GLOB.
+        - Index usage depends on JSON path form. `$.key.subkey` is not the
+          same as `("key", "subkey")` for index matching.
+        - `db.query` is also available as `db()` and `db.search()`.
 
-          1. String starting with "$" and follows SQLite's JSON path. Must properly quote
-             if it has dots, etc. No additional quoting is performed
-
-             >>> {"$.key":'val'}            # Single key
-             >>> {"$.key.subkey":'val'}     # Nested keys
-             >>> {"$.key.subkey[3]":'val'}  # Nested keys to nested list.
-
-          2. Tuple string-keys or integer items. The quoting will be handled for you.
-
-             >>> {('key',): 'val'}
-             >>> {('key','subkey'): 'val'}
-             >>> {('key','subkey',3): 'val'}
-
-          3. Advanced queries via query objects (explained below)
-
-        Advanced queries allow for more comparisons. Note: You must be careful
-        about parentheses for operations. Keys are assigned with attributes (dot)
-        and/or items (brackets). Items can have multiple separated by a comma and
-        can include integers for items within a list. Let 'db' be the JSONLiteDB object.
-
-          >>> db.query(db.Q.key == val)
-          >>> db.query(db.Q['key'] == val)
-
-          >>> db.query(db.Q.key.subkey == val)
-          >>> db.query(db.Q['key'].subkey == val)
-          >>> db.query(db.Q.key.['subkey'] == val)
-          >>> db.query(db.Q['key','subkey'] == val)
-
-          >>> qb.query(db.Q.key.subkey[3] == val)
-          >>> qb.query(db.Q.key['subkey',3] == val)
-
-        Complex Example:
-
-          >>> db.query((db.Q['other key',9] >= 4) & (Q().key < 3)) # inequality
-
-        Queries support most comparison operations (==, !=, >,>=,<, <=, etc) plus:
-
-            LIKE statements:  db.Q.key % "pat%tern"
-            GLOB statements:  db.Q.key * "glob*pattern"
-            REGEX statements: db.Q.key @ "regular.*expression"  # See note
-
-        Note regular expressions ("@") use Python's 're' library. These are often slower
-        than LIKE ('%') and GLOB ('*') queries which use native SQLite queries.
-
-        Warning:
-            While the various constructions may be *functionally* the same (e.g.
-            '$.key.subkey' vs ('key','subkey')), when using indexes, they will not
-            be the same!
-
-        db.query() is also aliased to db() and db.search()
-
-        Order By:
-        ---------
-        Specify how to order the results with an SQL ORDER BY clause.
-
-        Much like query, but without the comparison (e.g. equality), it can take a few
-        forms. The biggest difference is that a "-" or "+" be proceed it to specify order
-
-        1. String starting with "$" and follows SQLite's JSON path. Must properly quote
-           if it has dots, etc. No additional quoting is performed. A preceding - mean
-           DESC and + means ASC but isn't needed
-
+        Order By
+        --------
+        Use `_orderby` to specify ordering. Accepted forms:
+        1) JSON path string:
            >>> "$.key"
-           >>> "$.key.subkey"
-           >>> "$.key.subkey[3]"
-
-           >>> "-$.key"
            >>> "-$.key.subkey"
-           >>> "-$.key.subkey[3]"
-
-        2. String without '$' meaning it will be escaped and quoted. ADD NEG DESC
-
+        2) Plain key name (auto-quoted):
            >>> "key"
            >>> "-key"
-
-        3. Tuple string-keys or integer items. The quoting will be handled for you. The
-           first, and only the first, item can have a "-" in front to set the orderby
-
-            >>> ('key',)
-            >>> ('key','subkey')
-            >>> ('key','subkey',3)
-
-            >>> ('-key',)
-            >>> ('-key','subkey')
-            >>> ('-key','subkey',3)
-
-            WARNING: It must be a tuple as a list will infer multiple items.
-            WARNING: Only the first item may be +/-
-
-        4. Advanced queries via query objects. Similar to above but without comparison
-
+        3) Tuple path (first element can include +/-):
+           >>> ("key", "subkey")
+           >>> ("-key", "subkey", 3)
+        4) Query object (no comparison):
            >>> db.Q.key
-           >>> db.Q.key.subkey
-           >>> db.Q.key.subkey[3]
-
-           >>> -db.Q.key
            >>> -db.Q.key.subkey
-           >>> -db.Q.key.subkey[3]
 
-        You can also specify a list of items to set the order
+        Multiple orderings:
+        >>> ["-key1", db.Q.key2, ("-key3", "subkey")]
 
-            ["-key1", "db.Q.key2", ('-key3','subkey')]
-
-        A preceding + is ASC (default) and a - is DESC. A - can only be on the first
-        item in a tuple or before the '$' if given a string
+        A leading `-` selects DESC, `+` selects ASC (default).
         """
         _load = query_kwargs.pop("_load", True)
         _limit = query_kwargs.pop("_limit", None)
@@ -469,34 +354,28 @@ class JSONLiteDB:
 
     def query_one(self, *query_args, **query_kwargs):
         """
-        Query the database and return a single item matching the criteria.
+        Return the first matching document (or None).
 
-        The only difference between this and query() is that query_one adds
-        "LIMIT 1" to the query.
+        This is equivalent to `query(..., _limit=1)` but returns a single
+        item or None instead of an iterator.
 
-        Parameters:
-        -----------
-        *query_args : positional arguments
-            Arguments can be dictionaries of equality key:value pairs or advanced
-            queries. Multiple are combined with AND logic. See query() for details
+        Parameters
+        ----------
+        *query_args, **query_kwargs
+            Same as `query()`.
 
-        **query_kwargs : keyword arguments
-            Keywords that represent equality conditions. Multiple are combined with
-            AND logic.
+        Returns
+        -------
+        DBDict | DBList | object | None
+            Decoded JSON object, list, scalar, or None if no match.
 
-        Returns:
+        Examples
         --------
-        DBDict, DBList or None
-            A single DBDict or DBList object representing the JSON item, or None
-            if no match is found.
+        >>> db.query_one(first="John", last="Lennon")
 
-        Examples:
-        ---------
-        >>> db.query_one(first='John', last='Lennon')
-
-        See Also:
-        ---------
-        query : Method for querying multiple items.
+        See Also
+        --------
+        query
         """
         query_kwargs["_limit"] = 1
         try:
@@ -505,30 +384,25 @@ class JSONLiteDB:
             return None
 
     search_one = one = query_one
+    find_one = query_one
 
     def count(self, *query_args, **query_kwargs):
         """
-        Count the number of items matching the query criteria. This uses SQLite to
-        count and is faster than counting the items returned in a query.
+        Count matching documents using SQLite.
 
-        Parameters:
-        -----------
-        *query_args : positional arguments
-            Arguments can be dictionaries of equality key:value pairs or advanced
-            queries. Multiple are combined with AND logic. See query() for details.
+        Parameters
+        ----------
+        *query_args, **query_kwargs
+            Same as `query()`.
 
-        **query_kwargs : keyword arguments
-            Keywords that represent equality conditions. Multiple are combined with
-            AND logic.
-
-        Returns:
-        --------
+        Returns
+        -------
         int
-            The number of items matching the query criteria.
+            Number of matching rows.
 
-        Examples:
-        ---------
-        >>> db.count(first='George')
+        Examples
+        --------
+        >>> db.count(first="George")
         """
         qstr, qvals = JSONLiteDB._query2sql(*query_args, **query_kwargs)
 
@@ -544,43 +418,30 @@ class JSONLiteDB:
 
     def query_by_path_exists(self, path, _load=True, _orderby=None):
         """
-        Return items iterator over items whos path exist. Paths can be nested
-        and take the usual possible four forms (single-key string, SQLite
-        JSON path, tuple, and/or query object).
+        Return documents that contain a given JSON path.
 
-        Note that this is similar to
+        This differs from `db.query(db.Q.path != None)` because it matches
+        paths that exist even if the stored value is `None`.
 
-            >>> db.query(db.Q.path != None)
-
-        but if you have items that are set as `None`, that query will miss it.
-
-        Parameters:
-        -----------
-        path : str or tuple
-            The JSON path to check for existence. Can be a single-key string, a
-            JSON path string, or a tuple representing a path.
-
+        Parameters
+        ----------
+        path : str | tuple | Query
+            JSON path to check for existence.
         _load : bool, optional
-            Determines whether to load the result as JSON objects. Defaults to True.
+            Load JSON objects (default True).
+        _orderby : optional
+            Ordering specification. See `query()`.
 
-        _orderby
-            How to order the results. See query() for details
-
-        Returns:
-        --------
+        Returns
+        -------
         QueryResult
-            An iterator of DBDicts, each representing a JSON object in the database
-            where the specified path exists.
+            Iterator over rows where the path exists.
 
-        Examples:
-        ---------
-        The following example queries for items where the path `details.birthdate` exists.
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insert({'first': 'John', 'last': 'Lennon', 'details': {'birthdate': 1940}})
-        >>> result = db.query_by_path_exists(('details', 'birthdate'))
-        >>> for item in result:
-        ...     print(item)
-        {'first': 'John', 'last': 'Lennon', 'details': {'birthdate': 1940}}
+        Examples
+        --------
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insert({"first": "John", "details": {"birthdate": 1940}})
+        >>> list(db.query_by_path_exists(("details", "birthdate")))
         """
 
         path = split_query(path)
@@ -617,43 +478,82 @@ class JSONLiteDB:
         )
         return QueryResult(res, _load=_load)
 
+    def count_by_path_exists(self, path):
+        """
+        Count documents where a JSON path exists.
+
+        Parameters
+        ----------
+        path : str | tuple | Query
+            JSON path to check for existence.
+
+        Returns
+        -------
+        int
+            Number of rows where the path exists.
+
+        Examples
+        --------
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insert({"a": {"b": 1}})
+        >>> db.count_by_path_exists(("a", "b"))
+        1
+        """
+        path = split_query(path)
+        if len(path) == 0:
+            return 0
+        if len(path) == 1:
+            parent = Query()
+            child = path[0]
+        else:
+            parent = path[:-1]
+            child = path[-1]
+
+        parent = build_index_paths(parent)[0]
+
+        res = self.execute(
+            f"""
+            SELECT COUNT(DISTINCT {self.table}.rowid) as count
+            FROM
+                {self.table},
+                JSON_EACH({self.table}.data,?) as each
+            WHERE
+                each.key = ?
+            """,
+            (parent, child),
+        ).fetchone()
+        return res["count"]
+
     def aggregate(self, path, /, function):
         """
-        Compute an aggregate function over a specified JSON path.
+        Compute an aggregate over a JSON path.
 
-        Parameters:
-        -----------
-        path : str or tuple
-            The JSON path to aggregate. Can be a string or tuple representing the path.
-
+        Parameters
+        ----------
+        path : str | tuple | Query
+            JSON path to aggregate.
         function : str
-            The aggregate function to apply. Options are 'AVG', 'COUNT', 'MAX', 'MIN',
-            'SUM', or 'TOTAL'.
+            One of: 'AVG', 'COUNT', 'MAX', 'MIN', 'SUM', 'TOTAL'.
 
-        Returns:
-        --------
-        float or int
-            The result of the aggregate function applied to the specified path.
-
-        Raises:
+        Returns
         -------
+        float | int
+            Aggregate result.
+
+        Raises
+        ------
         ValueError
-            If an unallowed aggregate function is specified.
+            If an unsupported aggregate function is provided.
 
-        Examples:
-        ---------
-        The following example calculates the average of the 'value' field across
-        all items.
-
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insertmany([{'value': 10}, {'value': 20}, {'value': 30}])
-        >>> avg_value = db.aggregate('value', 'AVG')
-        >>> print(avg_value)
+        Examples
+        --------
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insertmany([{"value": 10}, {"value": 20}, {"value": 30}])
+        >>> db.aggregate("value", "AVG")
         20.0
 
-        OR
-
-        >>> db.AVG('value') # 20.0 Same as above
+        >>> db.AVG("value")
+        20.0
         """
         allowed = {"AVG", "COUNT", "MAX", "MIN", "SUM", "TOTAL"}
         function = function.upper()
@@ -677,8 +577,15 @@ class JSONLiteDB:
     SUM = partialmethod(aggregate, function="SUM")
     TOTAL = partialmethod(aggregate, function="TOTAL")
 
-    def _explain_query(self, *query_args, **query_kwargs):
-        """Explain the query. Used for testing"""
+    def explain_query(self, *query_args, **query_kwargs):
+        """
+        Return `EXPLAIN QUERY PLAN` rows for a query.
+
+        Parameters
+        ----------
+        *query_args, **query_kwargs
+            Same as `query()`.
+        """
         _orderby = query_kwargs.pop("_orderby", None)
         order = self._orderby2sql(_orderby)
 
@@ -696,29 +603,22 @@ class JSONLiteDB:
         )
         return [dict(row) for row in res]
 
+    analyze = explain_query
+
     def remove(self, *query_args, **query_kwargs):
         """
-        Remove items from the database matching the specified query criteria.
+        Remove documents matching the query.
 
-        WARNING: Not specifying any queries will purge the database!
+        WARNING: If no criteria are provided, all rows are deleted.
 
-        Parameters:
-        -----------
-        *query_args : positional arguments
-            Arguments can be dictionaries of equality key:value pairs or advanced
-            queries. Multiple are combined with AND logic.
+        Parameters
+        ----------
+        *query_args, **query_kwargs
+            Same as `query()`.
 
-        **query_kwargs : keyword arguments
-            Keywords that represent equality conditions. Multiple are combined with
-            AND logic.
-
-        Returns:
+        Examples
         --------
-        None
-
-        Examples:
-        ---------
-        >>> db.remove(first='George')
+        >>> db.remove(first="George")
         """
         qstr, qvals = JSONLiteDB._query2sql(*query_args, **query_kwargs)
 
@@ -734,14 +634,10 @@ class JSONLiteDB:
 
     def purge(self):
         """
-        Remove all items from the database.
+        Delete all documents in the table.
 
-        Returns:
+        Examples
         --------
-        None
-
-        Examples:
-        ---------
         >>> db.purge()
         >>> len(db)
         0
@@ -750,23 +646,18 @@ class JSONLiteDB:
 
     def remove_by_rowid(self, *rowids):
         """
-        Remove items from the database by their rowid.
+        Remove documents by rowid.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         *rowids : int
-            One or more rowids of the items to be removed.
+            One or more SQLite rowids.
 
-        Returns:
+        Examples
         --------
-        None
-
-        Examples:
-        ---------
-        The following removes an item from the database using its rowid.
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insert({'first': 'Ringo', 'last': 'Starr', 'birthdate': 1940})
-        >>> item = db.query_one(first='Ringo', last='Starr')
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insert({"first": "Ringo", "last": "Starr"})
+        >>> item = db.query_one(first="Ringo")
         >>> db.remove_by_rowid(item.rowid)
         """
         with self:
@@ -784,36 +675,27 @@ class JSONLiteDB:
 
     def __delitem__(self, rowid):
         """
-        Delete an item with a given rowid
+        Delete a single document by rowid.
 
         Parameters
         ----------
         rowid : int
-            The rowid of the item to deleye. Must correspond to a valid SQLite rowid
-            (note that rowids start at 1).
+            SQLite rowid to delete (rowids start at 1).
 
         Raises
         ------
         TypeError
-            If ``rowid`` is a tuple. Only a single item can be deleted at a time.
-            See remove_by_rowid() to delete multiples
-
+            If `rowid` is a tuple. Use `remove_by_rowid()` for multiple rows.
         IndexError
-            If no item exists with the given rowid.
-
-        See Also
-        --------
-        remove_by_rowid : Lower-level delete/remove method. Accepts multiple rowids and
-                          does not raise an IndexError
+            If no row exists with the given rowid.
 
         Examples
         --------
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insert({'first': 'George', 'last': 'Martin'})
-        >>> del db[1] # rowids start at 1
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insert({"first": "George", "last": "Martin"})
+        >>> del db[1]
         >>> len(db)
         0
-
         """
         if isinstance(rowid, tuple):
             raise TypeError("Can only delete one item at a time. Try delete()")
@@ -829,34 +711,27 @@ class JSONLiteDB:
 
     def get_by_rowid(self, rowid, *, _load=True):
         """
-        Retrieve an item from the database by its rowid.
+        Retrieve a document by rowid.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         rowid : int
-            The rowid of the item to retrieve.
-
+            SQLite rowid to fetch.
         _load : bool, optional
-            Determines whether to load the result as a JSON object. Defaults to True.
+            Return decoded JSON (default True) or raw JSON string.
 
         Returns
         -------
-        DBDict or DBList or object
-            The item retrieved from the database. The type depends on the stored data:
-            - ``DBDict`` if the item is a JSON object (dict).
-            - ``DBList`` if the item is a JSON array (list).
-            - The raw value otherwise.
-            DBDict and DBList objects are just like dict and list but have a 'rowid'
-            attribute
+        DBDict | DBList | object | None
+            Decoded JSON object/list, scalar, or None if not found.
 
-        Examples:
-        ---------
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insert({'first': 'George', 'last': 'Martin', 'birthdate': 1926})
-        >>> item = db.query_one(first='George', last='Martin')
-        >>> print(db.get_by_rowid(item.rowid))
-        {'first': 'George', 'last': 'Martin', 'birthdate': 1926}
-
+        Examples
+        --------
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insert({"first": "George", "last": "Martin"})
+        >>> item = db.query_one(first="George")
+        >>> db.get_by_rowid(item.rowid)
+        {'first': 'George', 'last': 'Martin'}
         """
         row = self.execute(
             f"""
@@ -888,43 +763,28 @@ class JSONLiteDB:
 
     def __getitem__(self, rowid):
         """
-        Retrieve an item from the database by its rowid.
+        Fetch a document by rowid (raises if missing).
 
         Parameters
         ----------
         rowid : int
-            The rowid of the item to retrieve. Must correspond to a valid SQLite rowid
-            (NOTE: rowids start at 1).
+            SQLite rowid to fetch.
 
         Returns
         -------
-        DBDict or DBList or object
-            The item retrieved from the database. The type depends on the stored data:
-            - ``DBDict`` if the item is a JSON object (dict).
-            - ``DBList`` if the item is a JSON array (list).
-            - The raw value otherwise.
-            DBDict and DBList objects are just like dict and list but have a 'rowid'
-            attribute
+        DBDict | DBList | object
+            Decoded JSON object/list or scalar.
 
         Raises
         ------
         TypeError
-            If ``rowid`` is a tuple. Only a single item can be retrieved at a time.
+            If `rowid` is a tuple.
         IndexError
-            If no item exists with the given rowid.
+            If no row exists with the given rowid.
 
         See Also
         --------
-        get_by_rowid : Lower-level retrieval method. Returns ``None`` instead of raising
-            ``IndexError``.
-
-        Examples
-        --------
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insert({'first': 'George', 'last': 'Martin'})
-        >>> item = db.query_one(first='George', last='Martin')
-        >>> db[item.rowid]
-        {'first': 'George', 'last': 'Martin'}
+        get_by_rowid
         """
         if isinstance(rowid, tuple):
             raise TypeError("Can only get one item at a time")
@@ -935,29 +795,23 @@ class JSONLiteDB:
 
     def items(self, _load=True):
         """
-        Return an iterator over all items in the database. The order is not guaranteed.
+        Iterate over all documents (unordered).
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         _load : bool, optional
-            Determines whether to load the results as JSON objects. Defaults to True.
+            Return decoded JSON (default True) or raw JSON strings.
 
-        Returns:
-        --------
+        Returns
+        -------
         QueryResult
-            An iterator of DBDicts, each representing a JSON object in the database.
+            Iterator over all rows.
 
-        Examples:
-        ---------
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insertmany([
-            {'first': 'John', 'last': 'Lennon'},
-            {'first': 'Paul', 'last': 'McCartney'}
-        ])
-        >>> for item in db.items():
-        ...     print(item)
-        {'first': 'John', 'last': 'Lennon'}
-        {'first': 'Paul', 'last': 'McCartney'}
+        Examples
+        --------
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insertmany([{"first": "John"}, {"first": "Paul"}])
+        >>> list(db.items())
         """
         res = self.execute(f"SELECT rowid, data FROM {self.table}")
 
@@ -967,43 +821,33 @@ class JSONLiteDB:
 
     def update(self, item, rowid=None, duplicates=False, _dump=True):
         """
-        Update an existing row in the database with new a new row.
+        Replace a stored document by rowid.
 
-        Parameters:
-        -----------
-        item : dict
-            The item to update in the database.
-
+        Parameters
+        ----------
+        item : dict | str
+            Replacement document or JSON string if `_dump=False`.
         rowid : int, optional
-            The rowid of the item to update. If not specified, inferred from the item's
-            'rowid' attribute.
-
-        duplicates : bool or str, optional
-            Specifies how to handle duplicate items if a unique index exists.
-            Options are:
-            - False (default): Raises an error if a duplicate is found.
-            - True or "replace": Replaces existing items that violate a unique index.
-            - "ignore": Ignores items that violate a unique index.
-
+            Rowid to update. If omitted, uses `item.rowid` if present.
+        duplicates : bool | str, optional
+            Handling for unique index conflicts (False, True/"replace", "ignore").
         _dump : bool, optional
-            If True (default), converts the item to a JSON string before updating.
-            Set to False if the input is already a JSON string.
+            JSON-encode `item` when True (default).
 
-        Raises:
-        -------
+        Raises
+        ------
         MissingRowIDError
-            If rowid is not specified and cannot be inferred.
-
+            If `rowid` is not provided and cannot be inferred.
         ValueError
-            If `duplicates` is not one of {True, False, "replace", "ignore"}.
+            If `duplicates` is not in {True, False, "replace", "ignore"}.
 
-        See Also:
+        See Also
         --------
-        patch: Apply a patch to all items matching the specified query criteria.
+        patch
 
-        Examples:
-        ---------
-        >>> db.update({'first': 'George', 'last': 'Harrison', 'birthdate': 1943}, rowid=1)
+        Examples
+        --------
+        >>> db.update({"first": "George", "last": "Harrison"}, rowid=1)
         """
         rowid = rowid or getattr(item, "rowid", None)  # rowid starts at 1
 
@@ -1036,62 +880,34 @@ class JSONLiteDB:
 
     def patch(self, patchitem, *query_args, **query_kwargs):
         """
-        Apply a patch to all items matching the optionally specified query criteria.
+        Apply an RFC-7396 JSON Merge Patch to matching documents.
 
-        Parameters:
-        -----------
-        patchitem : dict
-            The patch to apply. Follows the RFC-7396 [2] MergePatch algorithm.
-            Note: Setting a key's value to None removes that key from the object.
-
-        *query_args : positional arguments
-            Arguments can be dictionaries of equality key:value pairs or advanced
-            queries. Multiple are combined with AND logic. Note, if no query args or
-            keywords are specified, will apply to all!
-
-        **query_kwargs : keyword arguments
-            Keywords that represent equality conditions of key=value. Multiple are
-            combined with AND logic. Note, if no query args or keywords are specified,
-            will apply to all!
-
+        Parameters
+        ----------
+        patchitem : dict | str
+            Merge Patch document. Setting a key to None removes that key.
+        *query_args, **query_kwargs
+            Selection criteria (same as `query()`). If omitted, all rows
+            are patched.
         _dump : bool, optional
-            If True (default), converts the patch item to a JSON string before applying.
-            Set to False if the input is already a JSON string.
+            JSON-encode `patchitem` when True (default).
 
-        Returns:
+        Examples
         --------
-        None
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insert({"first": "George", "role": "producer"})
+        >>> db.patch({"role": "composer"}, first="George")
+        >>> db.patch({"role": None}, first="George")  # delete key
 
-        Examples:
-        ---------
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insert({'first': 'George', 'last': 'Martin', 'birthdate': 1926, 'role': 'producer'})
-        >>> db.patch({'role': 'composer'}, first='George', last='Martin')
-        >>> print(db.query_one(first='George', last='Martin'))
-        {'first': 'George', 'last': 'Martin', 'birthdate': 1926, 'role': 'composer'}
+        Notes
+        -----
+        - `None` removes keys, so you cannot set a value to JSON null
+          via `patch()`. Use a Python loop if you need explicit nulls.
 
-        The following example removes the key "role".
-
-        >>> db.patch({'role': None}, first='George', last='Martin')
-        >>> print(db.query_one(first='George', last='Martin'))
-        {'first': 'George', 'last': 'Martin', 'birthdate': 1926}
-
-        The following example adds a field to *all* rows. Notice no query is specified
-
-        >>> db.patch({'band':'The Beatles'})
-        >>> print(db.count(band='The Beatles'))
-        5
-
-        Limitations:
-        -----------
-        Because `None` is the keyword to remove the field, it cannot be used to set
-        the value to None. This is an SQLite (and RFC 7396) limitation. If this is
-        needed, use a Python loop.
-
-        References:
-        -----------
-        [1]: https://www.sqlite.org/json1.html#jpatch
-        [2]: https://datatracker.ietf.org/doc/html/rfc7396
+        References
+        ----------
+        https://www.sqlite.org/json1.html#jpatch
+        https://datatracker.ietf.org/doc/html/rfc7396
         """
         _dump = query_kwargs.pop("_dump", True)
 
@@ -1113,39 +929,32 @@ class JSONLiteDB:
 
     def path_counts(self, start=None):
         """
-        Return a dictionary of JSON paths and the count of items for each path.
+        Count keys at a given JSON path across all documents.
 
-        Parameters:
-        -----------
-        start : str, tuple, or None, optional
-            The starting path for counting keys. If None (default), counts all paths
-            at the root level. Can be a string with '$' for a full path, a single key
-            without '$', a tuple/list, or a Query object.
+        Parameters
+        ----------
+        start : str | tuple | Query | None, optional
+            Root path to inspect. Defaults to the document root.
 
-        Returns:
-        --------
+        Returns
+        -------
         dict
-            A dictionary where keys are JSON paths and values are the count of items
-            at each path.
+            Mapping of key -> count.
 
-        Examples:
-        ---------
-        The following counts the number of occurrences of each key at the root level.
-
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insertmany([
-        ...     {'first': 'John', 'last': 'Lennon', 'birthdate': 1940, 'address': {'city': 'New York', 'zip': '10001'}},
-        ...     {'first': 'Paul', 'last': 'McCartney', 'birthdate': 1942, 'address': {'city': 'Liverpool', 'zip': 'L1 0AA'}},
-        ...     {'first': 'George', 'last': 'Harrison', 'birthdate': 1943}
-        ... ])
-        >>> print(db.path_counts())
-        {'first': 3, 'last': 3, 'birthdate': 3, 'address': 2}
-
-        The following example counts the number of occurrences of each key within the
-        'address' object.
-
-        >>> print(db.path_counts('address'))
-        {'city': 2, 'zip': 2}
+        Examples
+        --------
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insertmany(
+        ...     [
+        ...         {"first": "John", "address": {"city": "New York"}},
+        ...         {"first": "Paul", "address": {"city": "Liverpool"}},
+        ...         {"first": "George"},
+        ...     ]
+        ... )
+        >>> db.path_counts()
+        {'first': 3, 'address': 2}
+        >>> db.path_counts("address")
+        {'city': 2}
         """
         start = start or "$"
         start = build_index_paths(start)[0]  # Always just one
@@ -1169,69 +978,48 @@ class JSONLiteDB:
 
     def keys(self, start=None):
         """
-        Return the set of keys (JSON paths) at the specified path.
+        Return keys present at a given JSON path.
 
-        This is a shorthand for `path_counts(start).keys()` and returns only the
-        keys found at the specified path in the JSON structure.
+        This is shorthand for `path_counts(start).keys()`.
 
         Parameters
         ----------
-        start : str, tuple, or None, optional
-            The starting path to extract keys from. If None (default), keys at the
-            root level are returned. Accepts the same input as `path_counts`.
+        start : str | tuple | Query | None, optional
+            Path to inspect. Defaults to the root.
 
         Returns
         -------
         KeysView
-            A view object containing the keys (paths) at the specified location.
-
-        Examples
-        --------
-        >>> db.keys()
-        dict_keys(['first', 'last', 'birthdate', 'address'])
-
-        >>> db.keys('address')
-        dict_keys(['city', 'zip'])
+            View of keys found at the specified path.
         """
         return self.path_counts(start=start).keys()
 
     def create_index(self, *paths, unique=False):
         """
-        Create an index on specified JSON paths to improve query performance.
+        Create an index on one or more JSON paths.
 
-        Parameters:
-        -----------
-        *paths : variable length argument list
-            Paths to index. Can be strings, tuples, or query objects.
-
+        Parameters
+        ----------
+        *paths : str | tuple | Query
+            Paths to index. Accepts the same path forms as `query()`.
         unique : bool, optional
-            If True, creates a unique index. Defaults to False.
+            Create a UNIQUE index if True.
 
-        Returns:
+        Examples
         --------
-        None
+        >>> db.create_index("first")
+        >>> db.create_index("first", "last")
+        >>> db.create_index(db.Q.first, db.Q.last)
+        >>> db.create_index(("address", "city"))
+        >>> db.create_index(db.Q.address.city)
+        >>> db.create_index(db.Q.addresses[1])
 
-        Examples:
-        ---------
-        >>> db.create_index('first')                # Single Key
-
-        >>> db.create_index('first','last')         # Multiple keys
-        >>> db.create_index(db.Q.first,db.Q.last)   # Multiple advanced queries
-
-        >>> db.create_index(('address','city'))     # Path with subkeys
-        >>> db.create_index(db.Q.address.city)      # Path with subkeys
-
-        >>> db.create_index(db.Q.addresses[1])      # Path w/ list index
-        >>> db.create_index(('addresses',3))        # Equiv to above
-
-        Note:
+        Notes
         -----
-        sqlite3 is EXTREMELY sensitive to the form of the query. For example:
-        db.create_index('key') and db.create_index('$.key'), which are identical in
-        practice, will not use the same index. (This is because the former becomes
-        '$."key"' which is not the same as '$.key').
-
-        It is best to always use the same construction as query() to be certain.
+        SQLite index usage depends on the JSON path syntax. For example,
+        `db.create_index("key")` and `db.create_index("$.key")` are not
+        interchangeable for index matching. Use the same form in `query()`
+        as you used when creating the index.
         """
         paths = build_index_paths(*paths)
 
@@ -1257,69 +1045,41 @@ class JSONLiteDB:
 
     def drop_index_by_name(self, name):
         """
-        Delete an index from the database by its name.
+        Drop an index by name.
 
-        Parameters:
-        -----------
+        Parameters
+        ----------
         name : str
-            The name of the index to be dropped.
+            Index name as returned by `indexes`.
 
-        Returns:
+        Examples
         --------
-        None
-
-        Examples:
-        ---------
-        The following example creates an index on the 'first' and 'last' field, then
-        drops it using its name.
-
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.create_index('first', 'last')
-        >>> print(db.indexes)
-        {'ix_items_250e4243': ['$."first"', '$."last"']}
-
-        >>> db.drop_index_by_name('ix_items_250e4243')
-        >>> print(db.indexes)
-        {}
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.create_index("first", "last")
+        >>> list(db.indexes)
+        ['ix_items_...']
+        >>> db.drop_index_by_name("ix_items_...")
         """
-        with self:  # Aparently this also must be manually quoted
+        with self:  # Apparently this also must be manually quoted
             self.execute(f"DROP INDEX IF EXISTS {sqlite_quote(name)}")
 
     def drop_index(self, *paths, unique=False):
         """
-        Delete an index from the database by query paths.
+        Drop an index by path definition.
 
-        Parameters:
-        -----------
-        *paths : variable length argument list
-            Paths for which the index was created. Can be strings, tuples, or query
-             objects.
-
+        Parameters
+        ----------
+        *paths : str | tuple | Query
+            Paths used to create the index.
         unique : bool, optional
-            Indicates whether the index was created as unique. Defaults to False.
+            Whether to target the UNIQUE index variant.
 
-        Returns:
+        Examples
         --------
-        None
-
-        Examples:
-        ---------
-        The following example creates a UNIQUE index on the 'first' and 'last' field,
-        then shows that dropping it w/o unique=True fails to do so but works as expected
-        when specified.
-
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.create_index('first', 'last', unique=True)
-        >>> print(db.indexes)
-        {'ix_items_250e4243_UNIQUE': ['$."first"', '$."last"']}
-
-        >>> db.drop_index('first', 'last') # Does nothing. Not the same index
-        >>> print(db.indexes)
-        {'ix_items_250e4243_UNIQUE': ['$."first"', '$."last"']}
-
-        >>> db.drop_index('first', 'last', unique=True)
-        >>> print(db.indexes)
-        {}
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.create_index("first", "last", unique=True)
+        >>> db.drop_index("first", "last")  # no-op
+        >>> db.drop_index("first", "last", unique=True)
         """
         paths = build_index_paths(*paths)
         index_name = (
@@ -1331,6 +1091,7 @@ class JSONLiteDB:
 
     @property
     def indexes(self):
+        """Return a mapping of index name -> list of JSON paths."""
         res = self.execute(
             """
             SELECT name,sql 
@@ -1351,6 +1112,7 @@ class JSONLiteDB:
     indices = indexes
 
     def about(self):
+        """Return metadata (created timestamp and version) from the kv table."""
         r = self.execute(
             f"""
                 SELECT * FROM {self.table}_kv 
@@ -1358,7 +1120,7 @@ class JSONLiteDB:
                 ORDER BY key""",
             ("created", "version"),
         ).fetchall()
-        # Note it is ORDER BY so the order wont change
+        # Note: ORDER BY keeps results stable for this query.
         created, version = [i["val"] for i in r]
         return _about_obj(created=created, version=version)
 
@@ -1418,8 +1180,10 @@ class JSONLiteDB:
     @staticmethod
     def _query2sql(*query_args, **query_kwargs):
         """
-        Combine *query_args, **query_kwargs into an SQL string and assocciated
-        qmarks values.
+        Build SQL WHERE clause and bind values from query inputs.
+
+        Returns a `(where_sql, values)` tuple suitable for parameterized
+        execution. If no criteria are provided, returns `"1 = 1"`.
         """
         eq_args = []
         qargs = []
@@ -1449,7 +1213,7 @@ class JSONLiteDB:
         if not qobj._query:
             raise MissingValueError("Must set an (in)equality for query")
 
-        # Neet to replace all placeholders with '?' but we also need to do
+        # Need to replace all placeholders with '?' but we also need to do
         # it in the proper order. May move to named (dict) style in the future but
         # this works well enough.
         reQ = re.compile(r"(!>>.*?<<!)")
@@ -1460,7 +1224,7 @@ class JSONLiteDB:
 
     def _orderby2sql(self, orderby):
         """
-        Turns orderby into SQL
+        Convert an `_orderby` specification into an SQL ORDER BY clause.
         """
         # JSON_EXTRACT(data, {sqlite_quote(path)})
         if not orderby:
@@ -1483,39 +1247,21 @@ class JSONLiteDB:
 
     def __len__(self):
         """
-        Return the number of items in the database.
+        Return the number of documents in the table.
 
-        Returns:
+        Examples
         --------
-        int
-            The total number of JSON objects stored in the database.
-
-        Examples:
-        ---------
-        >>> db = JSONLiteDB(':memory:')
-        >>> db.insert({'first': 'John', 'last': 'Lennon'})
-        >>> db.insert({'first': 'Paul', 'last': 'McCartney'})
-        >>> print(len(db))
-        2
+        >>> db = JSONLiteDB(":memory:")
+        >>> db.insert({"first": "John"})
+        >>> len(db)
+        1
         """
         res = self.execute(f"SELECT COUNT(rowid) FROM {self.table}").fetchone()
         return res[0]
 
     def close(self):
         """
-        Close the database connection.
-
-        This method should be called when the database is no longer needed to
-        ensure that all resources are properly released.
-
-        Returns:
-        --------
-        None
-
-        Examples:
-        ---------
-        >>> db = JSONLiteDB('mydata.db')
-        >>> db.close()
+        Close the underlying SQLite connection.
         """
         logger.debug("close")
         self.db.close()
@@ -1524,21 +1270,16 @@ class JSONLiteDB:
 
     def wal_checkpoint(self, mode=None):
         """
-        Execute a write-ahead-log checkpoint optionally a given mode.
+        Run a WAL checkpoint.
 
-        Parameters:
-        -----------
-        mode : None or str, optional
-            Mode for checkpoint. See [1] for details. Default is None. Options
-            are None, 'PASSIVE', 'FULL', 'RESTART', 'TRUNCATE'
+        Parameters
+        ----------
+        mode : str | None, optional
+            One of: None, 'PASSIVE', 'FULL', 'RESTART', 'TRUNCATE'.
 
-        Returns:
-        --------
-        None
-
-        References:
-        -----------
-        [1] https://sqlite.org/wal.html#ckpt
+        References
+        ----------
+        https://sqlite.org/wal.html#ckpt
         """
         if not mode in {None, "PASSIVE", "FULL", "RESTART", "TRUNCATE"}:
             raise ValueError(f"Invalid {mode = } specified")
@@ -1547,63 +1288,25 @@ class JSONLiteDB:
             with self:
                 self.execute(f"PRAGMA wal_checkpoint{mode};")
         except sqlite3.DatabaseError as E:  # pragma: no cover
-            logger.debug(f"WAL checkoint error {E!r}")
+            logger.debug(f"WAL checkpoint error {E!r}")
 
     def execute(self, *args, **kwargs):
         """
-        Execute a SQL statement against the UNDERLYING sqlite3 database.
+        Execute a SQL statement on the underlying sqlite3 connection.
 
-        This method is a wrapper around the `execute` method of the SQLite database
-        connection, allowing you to run SQL statements directly on the database.
-
-        Note that the sqlite3 connection is stored as the 'db' class variable and can be
-        accessed directly.
-
-        Parameters:
-        -----------
-        *args : tuple
-            Positional arguments that specify the SQL command and any parameters
-            to be used in the execution of the command.
-
-        **kwargs : dict
-            Keyword arguments that can be used to pass additional options for the
-            execution of the SQL command.
-
-        Returns:
-        --------
+        Returns
+        -------
         sqlite3.Cursor
-            A cursor object that can be used to iterate over the results of the
-            SQL query, if applicable.
-
         """
         return self.db.execute(*args, **kwargs)
 
     def executemany(self, *args, **kwargs):
         """
-        Execute many SQL statements against the UNDERLYING sqlite3 database.
+        Execute a parameterized SQL statement multiple times.
 
-        This method is a wrapper around the `executemany` method of the SQLite database
-        connection, allowing you to run SQL statements directly on the database.
-
-        Note that the sqlite3 connection is stored as the 'db' class variable and can be
-        accessed directly.
-
-        Parameters:
-        -----------
-        *args : tuple
-            Positional arguments that specify the SQL command and any parameters
-            to be used in the execution of the command.
-
-        **kwargs : dict
-            Keyword arguments that can be used to pass additional options for the
-            execution of the SQL command.
-
-        Returns:
-        --------
+        Returns
+        -------
         sqlite3.Cursor
-            A cursor object that can be used to iterate over the results of the
-            SQL query, if applicable.
-
         """
         return self.db.executemany(*args, **kwargs)
 
@@ -1636,14 +1339,21 @@ class JSONLiteDB:
 
 # This allows us to have a dict but set an attribute called rowid.
 class DBDict(dict):
-    pass
+    """Dictionary subclass that carries a `rowid` attribute."""
 
 
 class DBList(list):
-    pass
+    """List subclass that carries a `rowid` attribute."""
 
 
 class QueryResult:
+    """
+    Iterator wrapper for query results.
+
+    Returns decoded JSON objects by default (DBDict/DBList with `rowid`).
+    Use `_load=False` to iterate over raw JSON strings.
+    """
+
     def __init__(self, res, _load=True):
         self.res = res
         self._load = _load
@@ -1696,6 +1406,7 @@ class QueryResult:
 
 
 def regexp(pattern, string):
+    """SQLite REGEXP callback using Python's `re` module."""
     return bool(re.search(pattern, string))
 
 
@@ -1713,7 +1424,10 @@ class MissingRowIDError(ValueError):
 
 class Query:
     """
-    Query object to allow for more complex queries.
+    Build composable query expressions for JSONLiteDB.
+
+    Use attribute access or indexing to build paths, then compare to create
+    SQL fragments. Query objects can be combined with `&`, `|`, and `~`.
     """
 
     def __init__(self):
@@ -1860,7 +1574,12 @@ _about_obj = namedtuple("About", ("created", "version"))
 
 
 def _query_tuple2jsonpath(*args, **kwargs):
-    """Helper tool to build arguments. See query() method for details"""
+    """
+    Normalize query inputs into JSON paths.
+
+    Accepts dictionaries, strings, tuples, and integers and returns a mapping
+    of JSON path strings to values. See `query()` for accepted forms.
+    """
 
     kw = {}
     for arg in args:
@@ -1884,7 +1603,7 @@ def _query_tuple2jsonpath(*args, **kwargs):
 
         # Nested
         if not isinstance(key, tuple):
-            raise ValueError(f"Unsuported key type for: {key!r}")
+            raise ValueError(f"Unsupported key type for: {key!r}")
 
         # Need to combine but allow for integers including the first one
         key = group_ints_with_preceding_string(key)
@@ -1908,25 +1627,25 @@ class AssignedQueryError(ValueError):
 
 def build_index_paths(*args):
     """
-    Turn strings, tuple of strings, or query objects into the JSON path.
+    Normalize paths for index creation.
 
-        build_index_paths('key') --> ['$."key"']
+    Examples
+    --------
+    >>> build_index_paths("key")
+    ['$."key"']
+    >>> build_index_paths("key1", "key2")
+    ['$."key1"', '$."key2"']
+    >>> build_index_paths(("key1", "key2"))
+    ['$."key1"."key2"']
+    >>> build_index_paths(db.Q.key1.key2)
+    ['$."key1"."key2"']
 
-        build_index_paths('key1','key2') --> ['$."key1"', '$."key2"']
-
-        build_index_paths(('key1','key2')) --> ['$."key1"."key2"']
-        build_index_paths(db.Q.key1.key2) --> ['$."key1"."key2"']
-
-    Multiple items are joined. That is
-        build_index_paths('key1','key2') == [
-            build_index_paths('key1')[0],
-            build_index_paths('key2')[0]
-        ]
+    Multiple inputs are returned as separate paths.
     """
 
     paths = []
 
-    # Arguments. w/ or w/o values
+    # Arguments, with or without values.
     for arg in args:
         if isinstance(arg, dict):
             raise AssignedQueryError("Cannot index query dict. Just use the path(s)")
@@ -1949,7 +1668,7 @@ def build_index_paths(*args):
 
 def build_orderby_pairs(orderby):
     """
-    Turns orderby (JSON Path, ORDER) pairs
+    Normalize an order-by specification into (json_path, order) pairs.
     """
     if not orderby:
         return ""
@@ -2013,8 +1732,9 @@ def build_orderby_pairs(orderby):
 
 def split_query(path):
     """
-    This is the reverse of query_args and _build_index_paths.
-    Splits a full JSON path into parts
+    Split a JSON path into component keys/indices.
+
+    This is the inverse of the path-building helpers used by `query()`.
     """
     if not path:
         return tuple()
@@ -2264,7 +1984,7 @@ def sqlite_quote(text):
 
 def split_no_double_quotes(s, delimiter):
     """
-    Splits 's' at 'delimiter' but ignores items in double quotes
+    Split on a delimiter while preserving quoted substrings.
     """
     quoted = re.findall(r"(\".*?\")", s)
     reps = {q: randstr() for q in quoted}  # Could have harmless repeats
@@ -2304,10 +2024,16 @@ def randstr(N=16):
 
 
 def randkey(N=16):
+    """
+    Return a unique placeholder token for SQL query assembly.
+    """
     return f"!>>{randstr(N=N)}<<!"
 
 
 def translate(mystr, reps):
+    """
+    Replace all keys in `reps` with their corresponding values in `mystr`.
+    """
     for key, val in reps.items():
         mystr = mystr.replace(key, str(val))
     return mystr
@@ -2317,15 +2043,16 @@ def translate(mystr, reps):
 ## CLI Utils
 ###################################################
 def cli():
+    """Entry point for the JSONLiteDB command-line interface."""
     import argparse
     from textwrap import dedent
 
     desc = dedent(
         """
-        Command line tool for adding JSONL to a JSONLiteDB (sqlite) file.
-        
-        stdin is assumed to be line-delimited or can handle if there is just one entry
-        per line.
+        Command-line tool for inserting JSON/JSONL into a JSONLiteDB (SQLite) file.
+
+        Input is treated as JSON Lines (one JSON value per line). Files ending in
+        .json are parsed as full JSON; .jsonl files are read line-by-line.
         """
     )
 
@@ -2372,18 +2099,16 @@ def cli():
         nargs="*",
         default=["-"],
         help="""
-            Specify one or more JSON(L) files. If ends in '.jsonl', it will assume
-            it is line-delimited JSON (or one-entry-per-line). If '.json', will read
-            entire file. If '-' is specified (default), will read stdin. Will append in
-            order
-            """,
+            One or more JSON/JSONL files. Files ending in '.jsonl' are read line-by-line.
+            Files ending in '.json' are parsed as full JSON. Use '-' to read stdin.
+        """,
     )
 
     dump = subparser.add_parser(
         "dump",
         help="dump database to JSONL",
         parents=[global_parent],
-        description="Dump the ",
+        description="Dump a JSONLiteDB table to JSONL or full SQL.",
     )
 
     dump.add_argument("dbpath", help="JSONLiteDB file")
@@ -2392,9 +2117,8 @@ def cli():
         "--output",
         default="-",
         help="""
-            Specify output for dump. If '-' is specified (default), will write to
-            stdout
-            """,
+            Output file path. Use '-' (default) to write to stdout.
+        """,
     )
     dump.add_argument(
         "--file-mode",
@@ -2408,8 +2132,37 @@ def cli():
         "--sql",
         action="store_true",
         help="""
-            Do a full SQL dump, including all tables, indices, etc. 
-            This is similar to .dump in the sqlite3 shell""",
+            Emit a full SQL dump including tables and indexes (like `.dump` in
+            the sqlite3 shell).
+        """,
+    )
+
+    query = subparser.add_parser(
+        "query",
+        help="query database and emit JSONL",
+        parents=[global_parent],
+    )
+    query.add_argument("dbpath", help="JSONLiteDB file")
+    query.add_argument(
+        "filters",
+        nargs="*",
+        help="Filters in key=value form (values parsed as JSON when possible)",
+    )
+    query.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit results to N rows",
+    )
+    query.add_argument(
+        "--orderby",
+        action="append",
+        default=None,
+        help=(
+            "Order by key or JSON path; repeatable. Use commas to denote nested "
+            "paths (e.g., --orderby name --orderby=-age --orderby=-parent,child)."
+        ),
     )
 
     args = parser.parse_args()
@@ -2459,6 +2212,39 @@ def cli():
                     fp.write(line + "\n")
         finally:
             fp.close()
+    elif args.command == "query":
+        eq_args = []
+        eq_kwargs = {}
+        for filt in args.filters:
+            if "=" not in filt:
+                raise ValueError(f"Invalid filter {filt!r}. Use key=value.")
+            key, val = filt.split("=", 1)
+            key = key.strip()
+            try:
+                val = json.loads(val)
+            except json.JSONDecodeError:
+                pass
+
+            if key.startswith("$"):
+                eq_args.append({key: val})
+            else:
+                eq_kwargs[key] = val
+
+        q_kwargs = {}
+        if args.limit is not None:
+            q_kwargs["_limit"] = args.limit
+        if args.orderby:
+            orderby = []
+            for item in args.orderby:
+                parts = [p.strip() for p in item.split(",") if p.strip()]
+                if len(parts) > 1:
+                    orderby.append(tuple(parts))
+                else:
+                    orderby.append(parts[0])
+            q_kwargs["_orderby"] = orderby
+
+        for line in db.query(*eq_args, _load=False, **eq_kwargs, **q_kwargs):
+            sys.stdout.write(line + "\n")
 
     db.close()
 

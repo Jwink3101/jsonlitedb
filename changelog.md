@@ -2,6 +2,15 @@
 
 Newest on top
 
+## 0.1.10
+
+- Added query CLI subcommand with filtering, ordering (including nested paths), and limits.
+- Added `find_one`, `count_by_path_exists`, and public `explain_query`/`analyze` helpers.
+- Improved and standardized docstrings across the module.
+- Moved packaging metadata into `pyproject.toml` (PEP 621) and removed `setup.py`.
+
+Note, much of this was done with the help of ChatGPT and `codex` but all changes were reviewed, modified, and accepted.
+
 ## 0.1.9
 
 - Adds `_orderby` to `query()`, `query_by_path_exists()`, and related calls. Allows for complex ordering and ascending or descending. 
