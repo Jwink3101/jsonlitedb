@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import base64
 import datetime
 import hashlib
 import io
@@ -19,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.1.11"
+__version__ = "0.1.12"
 
 __all__ = [
     "AssignedQueryError",
@@ -41,6 +40,16 @@ if sys.version_info < (3, 8):  # pragma: no cover
     raise ImportError("Must use Python >= 3.8")
 
 DEFAULT_TABLE = "items"
+
+
+def _env_to_bool(name, default="false"):
+    val = os.environ.get(name, default)
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Set this (or JSONLITEDB_DISABLE_REGEX=1) to disable the REGEXP operator.
+# This is useful when query patterns may come from untrusted input.
+DISABLE_REGEX = _env_to_bool("JSONLITEDB_DISABLE_REGEX", "false")
 
 
 class JSONLiteDB:
@@ -104,7 +113,8 @@ class JSONLiteDB:
 
         self.db.row_factory = Row
         self.db.set_trace_callback(sqldebug)
-        self.db.create_function("REGEXP", 2, regexp, deterministic=True)
+        if not DISABLE_REGEX:
+            self.db.create_function("REGEXP", 2, regexp, deterministic=True)
 
         self.table = "".join(c for c in table if c == "_" or c.isalnum())
         logger.debug(f"{self.table = }")
@@ -1037,14 +1047,16 @@ class JSONLiteDB:
             patchitem = json.dumps(patchitem, ensure_ascii=False)
 
         with self:
+            params = {"patchitem": patchitem}
+            params.update(qvals)
             self.execute(
                 f"""
                 UPDATE {self.table}
-                SET data = JSON_PATCH(data,JSON(?))
+                SET data = JSON_PATCH(data,JSON(:patchitem))
                 WHERE
                     {qstr}
                 """,
-                (patchitem, *qvals),
+                params,
             )
 
     def path_counts(self, start=None):
@@ -1274,8 +1286,12 @@ class JSONLiteDB:
             created, version = self.about()
             logger.debug(f"DB Exists: {created = } {version = }")
             return
-        except:
-            logger.debug("DB does not exists. Creating")
+        except sqlite3.OperationalError as exc:
+            # Only initialize a new schema when metadata table is genuinely missing.
+            msg = str(exc).lower()
+            if "no such table" not in msg:
+                raise
+            logger.debug("DB metadata table missing. Creating schema")
 
         with self:
             db.execute(
@@ -1327,7 +1343,8 @@ class JSONLiteDB:
         Build SQL WHERE clause and bind values from query inputs.
 
         Returns a `(where_sql, values)` tuple suitable for parameterized
-        execution. If no criteria are provided, returns `"1 = 1"`.
+        execution with named parameters. If no criteria are provided,
+        returns `"1 = 1"`.
         """
         eq_args = []
         qargs = []
@@ -1353,18 +1370,10 @@ class JSONLiteDB:
                 qobj = arg
 
         if qobj is None:
-            return "1 = 1", []
+            return "1 = 1", {}
         if not qobj._query:
             raise MissingValueError("Must set an (in)equality for query")
-
-        # Need to replace all placeholders with '?' but we also need to do
-        # it in the proper order. May move to named (dict) style in the future but
-        # this works well enough.
-        reQ = re.compile(r"(!>>.*?<<!)")
-        qvals = reQ.findall(qobj._query)
-        qvals = [qobj._qdict[k] for k in qvals]
-        qstr = reQ.sub("?", qobj._query)
-        return qstr, qvals
+        return qobj._query, {k.removeprefix(":"): v for k, v in qobj._qdict.items()}
 
     def _orderby2sql(self, orderby):
         """
@@ -2128,50 +2137,58 @@ def sqlite_quote(text):
 
 def split_no_double_quotes(s, delimiter):
     """
-    Split on a delimiter while preserving quoted substrings.
+    Split on a delimiter while preserving double-quoted substrings.
+
+    Escaped quotes within quoted segments are handled.
     """
-    quoted = re.findall(r"(\".*?\")", s)
-    reps = {q: randstr() for q in quoted}  # Could have harmless repeats
-    ireps = {v: k for k, v in reps.items()}
+    if not delimiter:
+        raise ValueError("Delimiter cannot be empty")
 
-    s = translate(s, reps)
-    s = s.split(delimiter)
-    return [translate(t, ireps) for t in s]
+    out = []
+    buf = []
+    in_quotes = False
+    escaped = False
+    dlen = len(delimiter)
+    i = 0
 
+    while i < len(s):
+        ch = s[i]
 
-def randstr(N=16):
-    """
-    Generate a random URL-safe Base64-encoded string.
+        if in_quotes:
+            buf.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_quotes = False
+            i += 1
+            continue
 
-    Parameters
-    ----------
-    N : int, optional
-        Number of random bytes to generate before Base64 encoding.
-        Default is 16.
+        if ch == '"':
+            in_quotes = True
+            buf.append(ch)
+            i += 1
+            continue
 
-    Returns
-    -------
-    str
-        URL-safe Base64-encoded string generated from `N` random bytes.
-        The output length is approximately ``4/3 * N`` characters and
-        depends on the amount of padding removed during encoding.
+        if s.startswith(delimiter, i):
+            out.append("".join(buf))
+            buf = []
+            i += dlen
+            continue
 
-    Notes
-    -----
-    The function uses :func:`os.urandom` to generate cryptographically
-    secure random bytes. The bytes are encoded using URL-safe Base64
-    encoding and any trailing ``'='`` padding characters are removed,
-    so the resulting string length is not necessarily a multiple of 4.
-    """
-    rb = os.urandom(N)
-    return base64.urlsafe_b64encode(rb).rstrip(b"=").decode("ascii")
+        buf.append(ch)
+        i += 1
+
+    out.append("".join(buf))
+    return out
 
 
 def randkey(N=16):
     """
     Return a unique placeholder token for SQL query assembly.
     """
-    return f"!>>{randstr(N=N)}<<!"
+    return f":jldb_{os.urandom(N).hex()}"
 
 
 def translate(mystr, reps):
@@ -2362,8 +2379,10 @@ def cli():
         for filt in args.filters:
             if "=" not in filt:
                 raise ValueError(f"Invalid filter {filt!r}. Use key=value.")
-            key, val = filt.split("=", 1)
-            key = key.strip()
+            key, val = tuple(kv.strip() for kv in filt.split("=", 1))
+
+            # First try to load it as JSON which handles ints. Then load it directly
+            # as string.
             try:
                 val = json.loads(val)
             except json.JSONDecodeError:

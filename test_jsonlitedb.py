@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sqlite3
 import sys
 from pathlib import Path
@@ -993,10 +994,11 @@ def test_build_index_paths():
 
 
 def test_query2sql():
-    assert JSONLiteDB._query2sql(key="val") == (
-        "( JSON_EXTRACT(data, '$.\"key\"') = ? )",
-        ["val"],
-    )
+    qstr, qvals = JSONLiteDB._query2sql(key="val")
+    keys = re.findall(r":jldb_[0-9a-f]+", qstr)
+    assert len(keys) == 1
+    assert qstr == f"( JSON_EXTRACT(data, '$.\"key\"') = {keys[0]} )"
+    assert qvals == {keys[0].removeprefix(":"): "val"}
 
     qstr, qvals = JSONLiteDB._query2sql(
         (Query().val3 == "val3"),
@@ -1005,7 +1007,7 @@ def test_query2sql():
         val2="val2",
     )
 
-    assert qstr == (
+    assert re.sub(r":jldb_[0-9a-f]+", "?", qstr) == (
         """( ( ( ( """
         """JSON_EXTRACT(data, '$."val1"') = ? ) """
         """AND ( JSON_EXTRACT(data, '$."val2"') = ? ) ) """
@@ -1014,7 +1016,62 @@ def test_query2sql():
         """OR ( JSON_EXTRACT(data, '$."val4"') = ? """
         """) ) )"""
     )
-    assert qvals == ["val1", "val2", "val3", "val4", "otherval4"]
+    keys = re.findall(r":jldb_[0-9a-f]+", qstr)
+    assert [qvals[k.removeprefix(":")] for k in keys] == [
+        "val1",
+        "val2",
+        "val3",
+        "val4",
+        "otherval4",
+    ]
+
+
+def test_query_placeholder_token_in_path():
+    db = JSONLiteDB(":memory:")
+    item = {"!>>boom<<!": 1, "safe": "ok"}
+    db.insert(item)
+
+    # Regression: placeholder-like text in JSON path must not be parsed as a bind token.
+    rows = list(db.query({'$."!>>boom<<!"': 1}))
+    assert rows == [item]
+
+
+def test_disable_regex():
+    old_disable = jsonlitedb.DISABLE_REGEX
+    jsonlitedb.DISABLE_REGEX = True
+    try:
+        db = JSONLiteDB(":memory:")
+        db.insert({"a": "TE.ST"})
+        with pytest.raises(sqlite3.OperationalError, match="no such function: REGEXP"):
+            db.query(db.Q.a @ "TE.ST").all()
+    finally:
+        jsonlitedb.DISABLE_REGEX = old_disable
+
+
+def test_init_handles_missing_metadata_table():
+    def fake_about(_self):
+        raise sqlite3.OperationalError("no such table: items_kv")
+
+    old_about = JSONLiteDB.about
+    JSONLiteDB.about = fake_about
+    try:
+        db = JSONLiteDB(":memory:")
+        assert db.count() == 0
+    finally:
+        JSONLiteDB.about = old_about
+
+
+def test_init_reraises_unexpected_operational_error():
+    def fake_about(_self):
+        raise sqlite3.OperationalError("database is locked")
+
+    old_about = JSONLiteDB.about
+    JSONLiteDB.about = fake_about
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            JSONLiteDB(":memory:")
+    finally:
+        JSONLiteDB.about = old_about
 
 
 def test_build_orderby_pairs():
@@ -1212,11 +1269,17 @@ def test_sqlite_quote():
 
 
 def test_split_no_double_quotes():
-    jsonlitedb.split_no_double_quotes("a.b.c", ".") == ["a", "b", "c"]
-    jsonlitedb.split_no_double_quotes('a."b.c"', ".") == ["a", '"b.c"']
-    jsonlitedb.split_no_double_quotes('"a.b.c"', ".") == ['"a.b.c"']
-    jsonlitedb.split_no_double_quotes('"a.b.c', ".") == ['"a', "b", "c"]
-    jsonlitedb.split_no_double_quotes('"a.b"".c"', ".") == ['"a.b"".c"']
+    assert jsonlitedb.split_no_double_quotes("a.b.c", ".") == ["a", "b", "c"]
+    assert jsonlitedb.split_no_double_quotes('a."b.c"', ".") == ["a", '"b.c"']
+    assert jsonlitedb.split_no_double_quotes('"a.b.c"', ".") == ['"a.b.c"']
+    assert jsonlitedb.split_no_double_quotes('"a.b.c', ".") == ['"a.b.c']
+    assert jsonlitedb.split_no_double_quotes('"a.b"".c"', ".") == ['"a.b"".c"']
+    assert jsonlitedb.split_no_double_quotes(r'"a.\"b\".c".d', ".") == [
+        r'"a.\"b\".c"',
+        "d",
+    ]
+    with pytest.raises(ValueError, match="Delimiter cannot be empty"):
+        jsonlitedb.split_no_double_quotes("a.b", "")
 
 
 def test_non_dicts():
@@ -1407,7 +1470,7 @@ def test_cli():
                 "--orderby=-ii",
                 "--limit",
                 "2",
-                "key2=jsonl",
+                "key2 = jsonl",  # Spaces testing too
             ],
             shift=1,
         ):
@@ -1461,6 +1524,8 @@ def test_cli():
 
 
 if __name__ == "__main__":  # pragma: no cover
+    import tempfile
+
     test_JSONLiteDB_general()
     test_JSONLiteDB_file()
     test_JSONLiteDB_dbconnection()
@@ -1471,11 +1536,16 @@ if __name__ == "__main__":  # pragma: no cover
     test_JSONLiteDB_query_results()
     test_JSONLiteDB_patch()
     test_JSONLiteDB_stats()
-    test_JSONLiteDB_import_export_jsonl()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        test_JSONLiteDB_import_export_jsonl(Path(tmpdir))
     test_Query()
     test_query_args()
     test_build_index_paths()
     test_query2sql()
+    test_query_placeholder_token_in_path()
+    test_disable_regex()
+    test_init_handles_missing_metadata_table()
+    test_init_reraises_unexpected_operational_error()
     test_build_orderby_pairs()
     test_split_query()
     test_Row()

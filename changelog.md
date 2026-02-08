@@ -2,6 +2,16 @@
 
 Newest on top
 
+## 0.1.12 (2026-02-08)
+
+- Found a *minor* security issue related to filling placeholders. It would cause an inappropriate KeyError but would otherwise be okay. Moved to named SQL parameters and added a test for this pathology.
+- Added the ability to disable `REGEXP` / `@` for handling untrusted input that could cause catastrophic backtracking and consume CPU for a long time (ReDoS). Tested
+- Better handled errors in `_init`
+- (*minor*) Replace `split_no_double_quotes` with a state-machine approach. Removed additional utils around it
+
+Note, much of this was done with the help of ChatGPT and `codex` but all changes were reviewed, modified, and accepted.
+
+
 ## 0.1.11 (2026-01-12)
 
 - Added `import_jsonl()` and `export_jsonl()` helpers to mirror CLI workflows.

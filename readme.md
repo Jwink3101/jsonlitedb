@@ -245,7 +245,7 @@ In addition they support
 
 - `%` : `LIKE`
 - `*` : `GLOB`
-- `@` : `REGEXP` using Python's regex module
+- `@` : `REGEXP` using Python's regex module. Note that this can be disabled for untrusted input.
 
 
 
@@ -486,6 +486,23 @@ Note that while something like `10 <= var <= 20` is valid Python, a query must b
     (10 <= db.Q.var) & (db.Q.var <= 20 )
 
 And, as noted in "Basic Usage," they can do SQL `LIKE` comparisons (`db.Q.key % "%Val%"`), `GLOB` comparisons (`db.Q.key * "file*.txt"`), and `REGEXP` comparisons (`db.Q.key @ "\S+?\.[A-Z]"`).  
+
+### REGEXP Safety Toggle
+
+`REGEXP` (the `@` query operator) uses Python's `re` engine and may be unsafe for untrusted patterns.
+
+To disable it, set the environment variable before importing/creating a database:
+
+```bash
+export JSONLITEDB_DISABLE_REGEX=1
+```
+
+You can also disable it in code (for new connections) after import:
+
+```python
+import jsonlitedb
+jsonlitedb.DISABLE_REGEX = True
+```
   
 #### Form
 
@@ -511,10 +528,18 @@ It can also dump a database to JSONL.
 
 ## Known Limitations
 
-- Dictionary keys must be strings without a dot, double quote, square bracket, and may not start with `_`. Some of these may work but could have unexpected outcomes.
+- Dictionary keys must be strings without a dot, double quote, square bracket, and may not start with `_`, `+`, or `-`. Some of these may work but could have unexpected and untested consequences.
 - Functionally identical queries may not match for an index because SQLite is *extremely strict* about the pattern. Mitigate by using the same query mechanics for index creation and query. 
 - There is no distinction made between an entry having a key with a value of `None` vs. not having the key. However, you can use `query_by_path_exists()` to query items that have a certain path. There is no way still to mix this with other queries testing existence other than with `None`.  
 - While it will accept non-dict items like strings, lists, and tuples as a single item, queries on these do not work reliably.
+
+## AI/LLM/Agent Disclosure
+
+*We do not reject the use of AI-, LLM-, or agent-driven development, including “vibe coding.” However, we believe it is important to provide appropriate disclosure, as outlined below. We also prefer human-verified code and place high value on the trust users place in this project.*
+
+Up until version 0.1.10, there was no use of coding agents and only minimal AI via a chat interface. After that, OpenAI Codex was used to make small changes or perform grunt work. It also helped identify and fix (minor) security gaps.
+
+These changes were all done minimally and with close human review. There was no black-box "vibe-coding" and this largely remains a human-developed tool.
 
 ## FAQs
 
@@ -526,6 +551,8 @@ Yes and no. The idea is the complete lack of schema needed and as a notable impr
 
 Yes! The idea is simplicity and compatibility. SQLite basically runs everywhere and is widely accepted. It is only a slight step down from JSON Lines in being future proof. 
 
+There really aren't any other single-file, embedded [JSON] object storage databases with anywhere near the ubiquity or pedigree of SQLite.
+
 ### When using `duplicates='replace'`, it essentially deletes and inserts the item rather than replacing it for real (and keeping the `rowid` internally). Is that intended?
 
 Mostly yes. The alternative was considered but this behavior more closely matches the mental model of the tool.
@@ -534,9 +561,12 @@ Mostly yes. The alternative was considered but this behavior more closely matche
 
 JSONLiteDB provides a lot of functionality between queries and sorting but if you need more, just run on the database directly yourself!
 
+Similarly, the minimal CLI can help in some cases but JSONLiteDB is really meant to be accessed as a library.
+
 ### Can I use a custom encoder?
 
-Yes and no. You can use your own methods to encode the object you insert but since it uses SQLite's `JSON1`, it must be JSON that gets stored.
+Yes and no. You can use your own methods to encode the object you insert but since it uses SQLite's `JSON1`, it must be JSON that gets stored. You could probably hack something else into it but it is not recommended.
 
+---
 <!-- From https://github.com/dwyl/repo-badges -->  
 [100%]:https://img.shields.io/codecov/c/github/dwyl/hapi-auth-jwt2.svg
