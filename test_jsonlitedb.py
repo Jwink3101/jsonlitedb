@@ -23,6 +23,7 @@ from jsonlitedb import (
     Query,
     Row,
     cli,
+    parse_cli_filter_value,
     sqlite_quote,
 )
 
@@ -287,6 +288,8 @@ def test_JSONLiteDB_general():
     assert db.count(db.Q.role @ "prod.c") == 1
     assert db.count(db.Q.role @ "prod.*r") == 1
     assert db.count(db.Q.role @ "prod.x") == 0
+    assert db.count(_limit=2) == 2
+    assert db.count(_limit=2, _orderby="-born") == 2
 
     # Limits
     assert len(db(db.Q.born > 0).all()) == 5
@@ -1268,6 +1271,14 @@ def test_sqlite_quote():
     assert sqlite_quote(" hi\nthere \n ") == "' hi\nthere \n '"
 
 
+def test_parse_cli_filter_value():
+    assert parse_cli_filter_value("true") is True
+    assert parse_cli_filter_value("7") == 7
+    assert parse_cli_filter_value("1.5") == 1.5
+    assert parse_cli_filter_value('["a","b"]') == ["a", "b"]
+    assert parse_cli_filter_value("jsonl") == "jsonl"
+
+
 def test_split_no_double_quotes():
     assert jsonlitedb.split_no_double_quotes("a.b.c", ".") == ["a", "b", "c"]
     assert jsonlitedb.split_no_double_quotes('a."b.c"', ".") == ["a", '"b.c"']
@@ -1345,12 +1356,63 @@ class MockArgv:
         return self
 
 
+def test_cli_insert_defaults_to_stdin():
+    dbpath = "!!!TMP!!!defaultstdin.db"
+    Path(dbpath).unlink(missing_ok=True)
+
+    try:
+        stdin = io.StringIO('{"name":"defaultstdin","ii":99}\n')
+        with MockArgv(["insert", dbpath, "--table", "cli"], stdin=stdin, shift=1):
+            cli()
+
+        db = JSONLiteDB(dbpath, table="cli")
+        try:
+            assert db.query_one(name="defaultstdin")["ii"] == 99
+        finally:
+            db.close()
+    finally:
+        Path(dbpath).unlink(missing_ok=True)
+
+
+def test_cli_query_format_edges():
+    dbpath = "!!!TMP!!!queryedges.db"
+    Path(dbpath).unlink(missing_ok=True)
+
+    try:
+        db = JSONLiteDB(dbpath, table="cli")
+        db.insert({"a": 1}, "scalar")
+        db.close()
+
+        with MockArgv(
+            ["query", dbpath, "--table", "cli", "--json=[1,2,3]"],
+            shift=1,
+        ):
+            with pytest.raises(
+                ValueError, match="--json filters must decode to JSON objects"
+            ):
+                cli()
+
+        # count should honor --limit and agree with row output size
+        query_out = io.StringIO()
+        with MockArgv(
+            ["query", dbpath, "--table", "cli", "--format", "count", "--limit", "1"],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        assert query_out.getvalue().strip() == "1"
+    finally:
+        Path(dbpath).unlink(missing_ok=True)
+
+
 def test_cli():
     # Need to test .json, .jsonl, and one-item-per-line json (likely mislabeled jsonl
     # or stdin)
     dbpath = "!!!TMP!!!my.db"
     file1 = "!!!TMP!!!file1.JSON"
     file2 = "!!!TMP!!!file2.jsonl"
+    file3 = "!!!TMP!!!file3.jsonl"
+    file4 = "!!!TMP!!!file4.ndjson"
     dump = "!!!TMP!!!dump.jsonl"
     dump2 = "!!!TMP!!!dump.sql"
 
@@ -1441,10 +1503,72 @@ def test_cli():
         assert "key0" not in dup
         assert "key1" not in dup
 
+        with MockArgv(
+            [
+                "insert",
+                dbpath,
+                "--table",
+                "cli",
+                "--json",
+                '{"name":"test9","key3":"inline","ii":9}',
+            ],
+            shift=1,
+        ):
+            cli()
+        assert db.query_one(name="test9")["key3"] == "inline"
+
+        stdin = io.StringIO('{"name":"test10","key3":"stdin-json","ii":10}')
+        with MockArgv(
+            [
+                "insert",
+                dbpath,
+                "--table",
+                "cli",
+                "--stdin",
+                "--stdin-format",
+                "json",
+            ],
+            stdin=stdin,
+            shift=1,
+        ):
+            cli()
+        assert db.query_one(name="test10")["key3"] == "stdin-json"
+
+        Path(file3).write_text(
+            json.dumps({"name": "ordercheck", "src": "legacy", "ii": 2})
+        )
+        with MockArgv(
+            [
+                "insert",
+                dbpath,
+                "--table",
+                "cli",
+                "--duplicates",
+                "replace",
+                "--json",
+                '{"name":"ordercheck","src":"flag","ii":1}',
+                file3,
+            ],
+            shift=1,
+        ):
+            with contextlib.redirect_stderr(io.StringIO()) as err_out:
+                cli()
+        assert "positional insert inputs are deprecated" in err_out.getvalue()
+        assert db.query_one(name="ordercheck")["src"] == "legacy"
+
+        with open(file4, "wt") as fp:
+            print(json.dumps({"name": "test11", "key4": "ndjson", "ii": 11}), file=fp)
+        with MockArgv(
+            ["insert", dbpath, "--table", "cli", "--file", file4],
+            shift=1,
+        ):
+            cli()
+        assert db.query_one(name="test11")["key4"] == "ndjson"
+
         with MockArgv(["dump", dbpath, "--table", "cli", "--output", dump], shift=1):
             cli()
         dumpout = Path(dump).read_text().strip()
-        assert len(dumpout.split("\n")) == 7
+        assert len(dumpout.split("\n")) == 11
 
         with MockArgv(["dump", dbpath, "--sql", "--output", dump2], shift=1):
             cli()
@@ -1514,6 +1638,134 @@ def test_cli():
         ]
         assert [row["name"] for row in query_rows] == ["test7"]
 
+        query_out = io.StringIO()
+        with MockArgv(
+            ["query", dbpath, "--table", "cli", '--json={"name":"test7"}'],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        query_rows = [
+            json.loads(line) for line in query_out.getvalue().strip().splitlines()
+        ]
+        assert [row["name"] for row in query_rows] == ["test7"]
+
+        query_out = io.StringIO()
+        with MockArgv(
+            ["query", dbpath, "--table", "cli", "--format", "count", "key2=jsonl"],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        assert query_out.getvalue().strip() == "3"
+
+        query_out = io.StringIO()
+        with MockArgv(
+            ["query", dbpath, "--table", "cli", "--format", "json", "name=test7"],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        query_rows = json.loads(query_out.getvalue().strip())
+        assert [row["name"] for row in query_rows] == ["test7"]
+
+        query_out = io.StringIO()
+        with MockArgv(
+            [
+                "query",
+                dbpath,
+                "--table",
+                "cli",
+                "--format",
+                "json",
+                "key2=jsonl",
+                "--limit",
+                "2",
+            ],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        query_json = query_out.getvalue()
+        assert query_json.startswith("[\n")
+        assert query_json.endswith("\n]\n")
+        assert not query_json.startswith("[\n,")
+        assert ",\n" in query_json
+        query_rows = json.loads(query_json)
+        assert len(query_rows) == 2
+
+        query_out = io.StringIO()
+        with MockArgv(
+            [
+                "query",
+                dbpath,
+                "--table",
+                "cli",
+                "--format",
+                "json",
+                "name=does-not-exist",
+            ],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        assert query_out.getvalue() == "[\n\n]\n"
+        assert json.loads(query_out.getvalue()) == []
+
+        # "line-like" JSON encoder should be compact (no spaces around separators)
+        query_out = io.StringIO()
+        with MockArgv(
+            ["query", dbpath, "--table", "cli", "name=test7"],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        assert '"meta":{"rank":7}' in query_out.getvalue()
+
+        # count and limited query row count should match
+        query_out = io.StringIO()
+        with MockArgv(
+            [
+                "query",
+                dbpath,
+                "--table",
+                "cli",
+                "--format",
+                "count",
+                "key2=jsonl",
+                "--limit",
+                "2",
+            ],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        assert query_out.getvalue().strip() == "2"
+
+        query_out = io.StringIO()
+        with MockArgv(
+            ["query", dbpath, "--table", "cli", "key2=jsonl", "--limit", "2"],
+            shift=1,
+        ):
+            with contextlib.redirect_stdout(query_out):
+                cli()
+        assert len(query_out.getvalue().strip().splitlines()) == 2
+
+        with MockArgv(["query", "-h"], shift=1):
+            with pytest.raises(SystemExit) as exc, contextlib.redirect_stdout(
+                io.StringIO()
+            ) as help_out:
+                cli()
+        assert exc.value.code == 0
+        help_text = help_out.getvalue()
+        assert "Examples:" in help_text
+        assert "jsonlitedb query my.db name=George" in help_text
+        assert '--json=\'{"active": true, "rank": 7}\'' in help_text
+        assert "--orderby=last --orderby=-born" in help_text
+        assert (
+            "supports simple equality filters and path-based sorting only" in help_text
+        )
+
         with MockArgv(["query", dbpath, "--table", "cli", "badfilter"], shift=1):
             with pytest.raises(ValueError):
                 cli()
@@ -1552,8 +1804,11 @@ if __name__ == "__main__":  # pragma: no cover
     test_listify()
     test_group_ints_with_preceding_string()
     test_sqlite_quote()
+    test_parse_cli_filter_value()
     test_split_no_double_quotes()
     test_non_dicts()
+    test_cli_insert_defaults_to_stdin()
+    test_cli_query_format_edges()
     test_cli()
 
     print("!" * 50)

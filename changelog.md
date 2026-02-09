@@ -2,6 +2,14 @@
 
 Newest on top
 
+## 0.2.0 (2026-02-09)
+
+- Updated the CLI `insert` interface to allow adding a single item as well. Deprecated older interface but is (currently) still working and backwards compatible. 
+- Updated the CLI `query` interface to control the output format. Also added --json for query.
+- Adds _limit to db.count() to match query() even though it is functionally useless.
+
+Note, much of this was done with the help of ChatGPT and `codex` but all changes were reviewed, modified, and accepted.
+
 ## 0.1.12 (2026-02-08)
 
 - Found a *minor* security issue related to filling placeholders. It would cause an inappropriate KeyError but would otherwise be okay. Moved to named SQL parameters and added a test for this pathology.
@@ -10,7 +18,6 @@ Newest on top
 - (*minor*) Replace `split_no_double_quotes` with a state-machine approach. Removed additional utils around it
 
 Note, much of this was done with the help of ChatGPT and `codex` but all changes were reviewed, modified, and accepted.
-
 
 ## 0.1.11 (2026-01-12)
 
