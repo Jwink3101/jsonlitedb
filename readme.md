@@ -40,6 +40,10 @@ With some fake data.
 
 
 ```python
+>>> import os
+>>> 
+>>> os.environ["JSONLITEDB_DISABLE_META"] = "true"  # avoid churn
+>>> 
 >>> from jsonlitedb import JSONLiteDB
 ```
 
@@ -518,6 +522,9 @@ You can mix and match index or attribute for keys. The following are all **ident
 
 JSONLiteDB also installs a tool called "jsonlitedb" that makes it easy to read JSONL and JSON files into a database. This is useful for converting existing databases or appending data. The same workflow is available in the API via `db.import_jsonl(...)` and `db.export_jsonl(...)`.
 
+For CLI usage only, you can set `JSONLITEDB_CLI_TABLE` to change the default table name.  
+Passing `--table` on a command overrides the environment variable.
+
     $ jsonlitedb insert mydb.db newfile.jsonl  
     $ cat newdata.jsonl | jsonlitedb insert mydb.db  
     
@@ -533,13 +540,6 @@ It can also dump a database to JSONL.
 - There is no distinction made between an entry having a key with a value of `None` vs. not having the key. However, you can use `query_by_path_exists()` to query items that have a certain path. There is no way still to mix this with other queries testing existence other than with `None`.  
 - While it will accept non-dict items like strings, lists, and tuples as a single item, queries on these do not work reliably.
 
-## AI/LLM/Agent Disclosure
-
-*We do not reject the use of AI-, LLM-, or agent-driven development, including “vibe coding.” However, we believe it is important to provide appropriate disclosure, as outlined below. We also prefer human-verified code and place high value on the trust users place in this project.*
-
-Up until version 0.1.10, there was no use of coding agents and only minimal AI via a chat interface. After that, OpenAI Codex was used to make small changes or perform grunt work. It also helped identify and fix (minor) security gaps.
-
-These changes were all done minimally and with close human review. There was no black-box "vibe-coding" and this largely remains a human-developed tool.
 
 ## FAQs
 
@@ -566,6 +566,16 @@ Similarly, the minimal CLI can help in some cases but JSONLiteDB is really meant
 ### Can I use a custom encoder?
 
 Yes and no. You can use your own methods to encode the object you insert but since it uses SQLite's `JSON1`, it must be JSON that gets stored. You could probably hack something else into it but it is not recommended.
+
+## AI/LLM/Agent Disclosure
+
+*We do not reject the use of AI-, LLM-, or agent-driven development, including “vibe coding.” However, we believe it is important to provide appropriate disclosure, as outlined below. We also prefer human-verified code and place high value on the trust users place in this project.*
+
+Up until version 0.1.10, there was no use of coding agents and only minimal AI via a chat interface. After that, OpenAI Codex was used to make small changes or perform grunt work. It also helped identify and fix (minor) security gaps.
+
+These changes were all done minimally and with close human review. There was no black-box "vibe-coding" and this largely remains a human-developed tool.
+
+Beginning in 0.3.0, something closer to "vibe-coding" was used to expand the CLI and refactor into files. It was still reviewed and the majority of the critical module remains primarily human-written.
 
 ---
 <!-- From https://github.com/dwyl/repo-badges -->  

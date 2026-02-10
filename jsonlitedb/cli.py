@@ -1,0 +1,709 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import sys
+from textwrap import dedent
+
+from .jsonlitedb import JSONLiteDB, __version__
+
+CLI_TABLE_ENV = "JSONLITEDB_CLI_TABLE"
+
+
+class _AppendInsertInput(argparse.Action):
+    """
+    Record `insert` input sources in the exact order they appear on argv.
+
+    The `insert` command can combine `--stdin`, `--file`, and `--json`.
+    This action appends `(source_kind, payload)` tuples so execution can follow
+    command-line order deterministically.
+
+    Notes
+    -----
+    Positional insert inputs are deprecated and are appended after all flagged
+    inputs for backward compatibility.
+    """
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        inputs = getattr(namespace, self.dest, None)
+        if inputs is None:
+            inputs = []
+        kind = option_string.lstrip("-")
+        payload = None if values == [] else values
+        inputs.append((kind, payload))
+        setattr(namespace, self.dest, inputs)
+
+
+def _json_dump_line(item):
+    """
+    Encode an item as compact single-line JSON for CLI streaming output.
+    """
+    return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
+
+
+def parse_cli_filter_value(text):
+    """
+    Parse CLI filter text as JSON, falling back to raw string on parse failure.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def _raise_cli_integrity_error(exc, *, command):
+    message = str(exc).strip()
+    if "UNIQUE constraint failed" in message:
+        lines = ["Error: UNIQUE constraint violation."]
+        match = re.search(r"index '([^']+)'", message)
+        if match:
+            lines.append(f"Index: {match.group(1)}")
+        if command == "insert":
+            lines.append("Hint: use --duplicates ignore or --duplicates replace.")
+        lines.append(f"SQLite: {message}")
+        sys.stderr.write("\n".join(lines) + "\n")
+        raise SystemExit(1) from exc
+
+    sys.stderr.write(f"Integrity error: {message}\n")
+    raise SystemExit(1) from exc
+
+
+def cli():
+    """Entry point for the JSONLiteDB command-line interface."""
+    default_table = os.environ.get(CLI_TABLE_ENV) or "items"
+    desc = dedent(
+        f"""
+        Command-line tool for inserting JSON/JSONL into a JSONLiteDB (SQLite) file.
+
+        Input is treated as JSON Lines (one JSON value per line). Files ending in
+        .json are parsed as full JSON; .jsonl and .ndjson files are read line-by-line.
+
+        Default table comes from ${CLI_TABLE_ENV} (fallback: 'items').
+        Use --table to override for any command.
+        """
+    )
+
+    parser = argparse.ArgumentParser(description=desc)
+
+    global_parent = argparse.ArgumentParser(add_help=False)
+    global_parent.add_argument(
+        "--table",
+        default=default_table,
+        metavar="NAME",
+        help=(
+            "Table name. Defaults to %(default)r, or set "
+            f"${CLI_TABLE_ENV}. --table always overrides."
+        ),
+    )
+
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version="%(prog)s-" + __version__,
+    )
+    subparser = parser.add_subparsers(
+        dest="command",
+        title="Commands",
+        required=True,
+        metavar="COMMAND",
+        description="Run `%(prog)s <command> -h` for help",
+    )
+
+    load = subparser.add_parser(
+        "insert",
+        parents=[global_parent],
+        help="insert JSON into a JSONLiteDB database",
+    )
+
+    load.add_argument(
+        "--duplicates",
+        choices={"replace", "ignore"},
+        default=False,
+        help=(
+            'How to handle "UNIQUE" constraint conflicts. If omitted, conflicts '
+            "raise an error."
+        ),
+    )
+
+    load.add_argument("dbpath", help="JSONLiteDB file")
+    input_group = load.add_argument_group(
+        "Input sources",
+        dedent(
+            """
+            Input sources are processed in command-line order for flagged inputs.
+            Deprecated positional inputs are processed after all flagged inputs.
+            """
+        ),
+    )
+    input_group.add_argument(
+        "--stdin",
+        nargs=0,
+        action=_AppendInsertInput,
+        dest="inputs",
+        help="Read JSON or JSONL from stdin. See --stdin-format",
+    )
+    input_group.add_argument(
+        "--file",
+        action=_AppendInsertInput,
+        dest="inputs",
+        metavar="PATH",
+        help="""
+            JSON/JSONL file input. Files ending in '.jsonl' or '.ndjson'
+            are read line-by-line.
+            Files ending in '.json' are loaded as a full JSON value (single
+            item or array of items).
+        """,
+    )
+    input_group.add_argument(
+        "--json",
+        action=_AppendInsertInput,
+        dest="inputs",
+        metavar="ITEM",
+        help="""Single JSON item to add. Example: --json '{"first":"Jim","last":"Kim"}'""",
+    )
+    input_group.add_argument(
+        "--stdin-format",
+        choices=("json", "jsonlines"),
+        default="jsonlines",
+        help="Format to expect for --stdin. Default: '%(default)s'",
+    )
+    load.add_argument(
+        "legacy_inputs",
+        nargs="*",
+        metavar="FILE_OR_DASH",
+        help="""
+            Deprecated positional input(s) from older CLI usage. Use --file/--stdin
+            instead. Positional inputs are processed after all flagged inputs.
+        """,
+    )
+
+    dump = subparser.add_parser(
+        "dump",
+        help="dump database to JSONL",
+        parents=[global_parent],
+        description="Dump a JSONLiteDB table to JSONL or full SQL.",
+    )
+
+    dump.add_argument("dbpath", help="JSONLiteDB file")
+
+    dump.add_argument(
+        "--output",
+        default="-",
+        help="""
+            Output file path. Use '-' (default) to write to stdout.
+        """,
+    )
+    dump.add_argument(
+        "--file-mode",
+        choices=("a", "w"),
+        default="w",
+        dest="mode",
+        help="File mode for --output",
+    )
+
+    dump.add_argument(
+        "--sql",
+        action="store_true",
+        help="""
+            Emit a full SQL dump including tables and indexes (like `.dump` in
+            the sqlite3 shell).
+        """,
+    )
+
+    query_desc = dedent(
+        """
+        Query rows and emit matching JSON Lines.
+
+        Filters are limited to equality expressions and are combined with AND.
+        """
+    )
+    query_epilog = dedent(
+        """
+        Examples:
+          jsonlitedb query my.db name=George
+          jsonlitedb query my.db '$.meta.rank=7' active=true --limit 5
+          jsonlitedb query my.db --json='{"active": true, "rank": 7}'
+          jsonlitedb query my.db --orderby=last --orderby=-born
+          jsonlitedb query my.db key2=myquery --orderby=-meta,rank
+          jsonlitedb query my.db active=true rank=7 score=1.5 tags='["a","b"]'
+
+        Notes:
+          `query` supports simple equality filters and path-based sorting only.
+          Use Python `JSONLiteDB.query(...)` for OR/NOT, inequalities, LIKE/GLOB/REGEXP,
+          and other advanced query composition.
+        """
+    )
+    query = subparser.add_parser(
+        "query",
+        help="query database and emit JSONL",
+        parents=[global_parent],
+        description=query_desc,
+        epilog=query_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    query.add_argument("dbpath", help="JSONLiteDB file")
+    query.add_argument(
+        "filters",
+        nargs="*",
+        help="Filters in key=value form (values parsed as JSON when possible)",
+    )
+    query.add_argument(
+        "--json",
+        action="append",
+        default=None,
+        metavar="OBJECT",
+        help=(
+            "JSON object equality filter; repeatable. Each object is expanded "
+            "into ANDed key=value filters."
+        ),
+    )
+    query.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit results to N rows",
+    )
+    query.add_argument(
+        "--format",
+        choices=("jsonl", "json", "count"),
+        default="jsonl",
+        help="""
+            Output format.
+            Note that 'json' still does one item per line but is valid JSON as a whole.
+            Default: '%(default)s'""",
+    )
+    query.add_argument(
+        "--orderby",
+        action="append",
+        default=None,
+        help=(
+            "Order by key or JSON path; repeatable. Use commas to denote nested "
+            "paths (e.g., --orderby name --orderby=-age --orderby=-parent,child)."
+        ),
+    )
+
+    delete_desc = dedent(
+        """
+        Delete rows matching equality filters.
+
+        Safety: an empty filter set is rejected unless --allow-empty is provided.
+        """
+    )
+    delete = subparser.add_parser(
+        "delete",
+        help="delete matching rows",
+        parents=[global_parent],
+        description=delete_desc,
+    )
+    delete.add_argument("dbpath", help="JSONLiteDB file")
+    delete.add_argument(
+        "filters",
+        nargs="*",
+        help="Filters in key=value form (values parsed as JSON when possible)",
+    )
+    delete.add_argument(
+        "--json",
+        action="append",
+        default=None,
+        metavar="OBJECT",
+        help=(
+            "JSON object equality filter; repeatable. Each object is expanded "
+            "into ANDed key=value filters."
+        ),
+    )
+    delete.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Allow delete with no filters (deletes all rows in the table).",
+    )
+
+    create_index = subparser.add_parser(
+        "create-index",
+        help="create a JSON index",
+        parents=[global_parent],
+        description=(
+            "Create an index on one or more JSON paths. Use commas for nested "
+            "keys, e.g. 'meta,rank'."
+        ),
+    )
+    create_index.add_argument("dbpath", help="JSONLiteDB file")
+    create_index.add_argument(
+        "paths",
+        nargs="+",
+        help=(
+            "Index path(s): key, $.json.path, or comma-separated nested keys "
+            "(e.g., parent,child)."
+        ),
+    )
+    create_index.add_argument(
+        "--unique",
+        action="store_true",
+        help="Create a UNIQUE index.",
+    )
+    drop_index = subparser.add_parser(
+        "drop-index",
+        help="drop a JSON index",
+        parents=[global_parent],
+        description=(
+            "Drop indexes by name and/or by JSON paths. Use commas for nested keys, "
+            "e.g. 'meta,rank'."
+        ),
+    )
+    drop_index.add_argument("dbpath", help="JSONLiteDB file")
+    drop_index.add_argument(
+        "paths",
+        nargs="*",
+        help=(
+            "Index path(s): key, $.json.path, or comma-separated nested keys "
+            "(e.g., parent,child)."
+        ),
+    )
+    drop_index.add_argument(
+        "--name",
+        action="append",
+        default=None,
+        help="Index name to drop; repeatable.",
+    )
+    drop_index.add_argument(
+        "--unique",
+        action="store_true",
+        help="Target the UNIQUE index variant for path-based drops.",
+    )
+
+    indexes = subparser.add_parser(
+        "indexes",
+        help="list indexes",
+        parents=[global_parent],
+        description="List indexes for the selected table.",
+    )
+    indexes.add_argument("dbpath", help="JSONLiteDB file")
+
+    patch = subparser.add_parser(
+        "patch",
+        help="apply JSON Merge Patch to matching rows",
+        parents=[global_parent],
+        description=dedent(
+            """
+            Apply a JSON Merge Patch document to matching rows.
+
+            Important:
+              In JSON Merge Patch, keys set to null are removed.
+              This means you cannot set a value to JSON null with this command.
+            """
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    patch.add_argument("dbpath", help="JSONLiteDB file")
+    patch.add_argument(
+        "--patch",
+        required=True,
+        metavar="PATCH_OBJECT",
+        help="JSON object patch document. Example: --patch '{\"active\":true}'",
+    )
+    patch.add_argument(
+        "filters",
+        nargs="*",
+        help="Filters in key=value form (values parsed as JSON when possible)",
+    )
+    patch.add_argument(
+        "--json",
+        action="append",
+        default=None,
+        metavar="OBJECT",
+        help=(
+            "JSON object equality filter; repeatable. Each object is expanded "
+            "into ANDed key=value filters."
+        ),
+    )
+
+    count = subparser.add_parser(
+        "count",
+        help="count matching rows",
+        parents=[global_parent],
+        description="Count rows matching equality filters.",
+    )
+    count.add_argument("dbpath", help="JSONLiteDB file")
+    count.add_argument(
+        "filters",
+        nargs="*",
+        help="Filters in key=value form (values parsed as JSON when possible)",
+    )
+    count.add_argument(
+        "--json",
+        action="append",
+        default=None,
+        metavar="OBJECT",
+        help=(
+            "JSON object equality filter; repeatable. Each object is expanded "
+            "into ANDed key=value filters."
+        ),
+    )
+
+    stats = subparser.add_parser(
+        "stats",
+        help="show database stats",
+        parents=[global_parent],
+        description="Show human-readable row/index/storage stats for a table.",
+    )
+    stats.add_argument("dbpath", help="JSONLiteDB file")
+
+    args = parser.parse_args()
+
+    create_if_missing_commands = {"insert", "create-index"}
+    write_existing_commands = {"delete", "patch", "drop-index"}
+    read_only_existing_commands = {"query", "count", "dump", "indexes", "stats"}
+
+    def _db_missing_message(command, dbpath):
+        sys.stderr.write(
+            f"Error: database does not exist for '{command}': {dbpath}\n"
+            "Create it first with 'insert' or 'create-index'.\n"
+        )
+
+    if args.command in create_if_missing_commands:
+        db = JSONLiteDB(args.dbpath, table=args.table)
+    elif args.command in read_only_existing_commands:
+        try:
+            db = JSONLiteDB.read_only(args.dbpath, table=args.table)
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "unable to open database file" in msg:
+                _db_missing_message(args.command, args.dbpath)
+                raise SystemExit(1) from exc
+            raise
+    elif args.command in write_existing_commands:
+        try:
+            probe = JSONLiteDB.read_only(args.dbpath, table=args.table)
+            probe.close()
+        except sqlite3.OperationalError as exc:
+            msg = str(exc).lower()
+            if "unable to open database file" in msg:
+                _db_missing_message(args.command, args.dbpath)
+                raise SystemExit(1) from exc
+            raise
+        db = JSONLiteDB(args.dbpath, table=args.table)
+    else:
+        raise ValueError(
+            f"Unknown command category for {args.command!r}"
+        )  # pragma: no cover
+
+    def _parse_cli_eq_filters(filters, json_filters):
+        eq_args = []
+        eq_kwargs = {}
+
+        def _add_eq_filter(key, val):
+            if key.startswith("$"):
+                eq_args.append({key: val})
+            else:
+                eq_kwargs[key] = val
+
+        for filt in filters:
+            if "=" not in filt:
+                raise ValueError(f"Invalid filter {filt!r}. Use key=value.")
+            key, val = tuple(kv.strip() for kv in filt.split("=", 1))
+            val = parse_cli_filter_value(val)
+            _add_eq_filter(key, val)
+
+        for json_filter in json_filters or []:
+            filt = json.loads(json_filter)
+            if not isinstance(filt, dict):
+                raise ValueError("--json filters must decode to JSON objects")
+            for key, val in filt.items():
+                _add_eq_filter(str(key), val)
+
+        return eq_args, eq_kwargs
+
+    if args.command == "insert":
+
+        def _insert_parsed_json(value):
+            try:
+                if isinstance(value, list):
+                    db.insertmany(value, duplicates=args.duplicates)
+                else:
+                    db.insert(value, duplicates=args.duplicates)
+            except sqlite3.IntegrityError as exc:
+                _raise_cli_integrity_error(exc, command="insert")
+
+        def _insert_jsonlines(fp):
+            lines = (line.strip() for line in fp)
+            lines = (line for line in lines if line not in "[]")
+            lines = (line.rstrip(",") for line in lines)
+            try:
+                db.insertmany(lines, _dump=False, duplicates=args.duplicates)
+            except sqlite3.IntegrityError as exc:
+                _raise_cli_integrity_error(exc, command="insert")
+
+        inputs = list(args.inputs or [])
+        if args.legacy_inputs:
+            sys.stderr.write(
+                "Deprecation warning: positional insert inputs are deprecated; "
+                "use --file/--stdin. Positional inputs are processed last.\n"
+            )
+            inputs.extend([("legacy", item) for item in args.legacy_inputs])
+        if not inputs:
+            inputs = [("stdin", None)]
+
+        read_stdin = False
+        for source, payload in inputs:
+            if source == "json":
+                _insert_parsed_json(json.loads(payload))
+                continue
+
+            if source == "stdin" or (source == "legacy" and payload == "-"):
+                if read_stdin:
+                    continue
+                read_stdin = True
+                if args.stdin_format == "json":
+                    _insert_parsed_json(json.load(sys.stdin))
+                else:
+                    _insert_jsonlines(sys.stdin)
+                continue
+
+            file = payload
+            if file.lower().endswith(".json"):
+                with open(file, "rt") as fp:
+                    _insert_parsed_json(json.load(fp))
+            else:
+                with open(file, "rt") as fp:
+                    _insert_jsonlines(fp)
+    elif args.command == "dump":
+        try:
+            fp = (
+                open(args.output, mode=f"{args.mode}t")
+                if args.output != "-"
+                else sys.stdout
+            )
+            if args.sql:
+                for line in db.db.iterdump():
+                    fp.write(line + "\n")
+            else:
+                for line in db.items(_load=False):
+                    fp.write(line + "\n")
+        finally:
+            fp.close()
+    elif args.command == "query":
+        eq_args, eq_kwargs = _parse_cli_eq_filters(args.filters, args.json)
+
+        q_kwargs = {}
+        if args.limit is not None:
+            q_kwargs["_limit"] = args.limit
+        if args.orderby:
+            orderby = []
+            for item in args.orderby:
+                parts = [p.strip() for p in item.split(",") if p.strip()]
+                if len(parts) > 1:
+                    orderby.append(tuple(parts))
+                else:
+                    orderby.append(parts[0])
+            q_kwargs["_orderby"] = orderby
+
+        if args.format == "count":
+            count_res = db.count(*eq_args, **eq_kwargs, **q_kwargs)
+            sys.stdout.write(str(count_res) + "\n")
+            db.close()
+            return
+
+        if args.format == "json":
+            sys.stdout.write("[\n")
+        first = True
+        for item in db.query(*eq_args, **eq_kwargs, **q_kwargs):
+            if args.format == "jsonl":
+                sys.stdout.write(_json_dump_line(item) + "\n")
+            else:
+                if not first:
+                    sys.stdout.write(",\n")
+                sys.stdout.write(_json_dump_line(item))
+                first = False
+        if args.format == "json":
+            sys.stdout.write("\n]\n")
+    elif args.command == "delete":
+        eq_args, eq_kwargs = _parse_cli_eq_filters(args.filters, args.json)
+        if not args.allow_empty and not (eq_args or eq_kwargs):
+            sys.stderr.write(
+                "Error: refusing to delete all rows without filters.\n"
+                "Add one or more filters (e.g. name=Paul) or use --allow-empty.\n"
+            )
+            raise SystemExit(1)
+        db.remove(*eq_args, **eq_kwargs)
+    elif args.command == "create-index":
+        paths = []
+        for item in args.paths:
+            if "," in item:
+                parts = tuple(part.strip() for part in item.split(",") if part.strip())
+                if not parts:
+                    raise ValueError("Invalid index path: empty comma-separated item")
+                paths.append(parts)
+            else:
+                paths.append(item)
+        try:
+            db.create_index(*paths, unique=args.unique)
+        except sqlite3.IntegrityError as exc:
+            _raise_cli_integrity_error(exc, command="create-index")
+    elif args.command == "drop-index":
+        dropped = False
+        for name in args.name or []:
+            db.drop_index_by_name(name)
+            dropped = True
+
+        if args.paths:
+            paths = []
+            for item in args.paths:
+                if "," in item:
+                    parts = tuple(
+                        part.strip() for part in item.split(",") if part.strip()
+                    )
+                    if not parts:
+                        raise ValueError(
+                            "Invalid index path: empty comma-separated item"
+                        )
+                    paths.append(parts)
+                else:
+                    paths.append(item)
+            db.drop_index(*paths, unique=args.unique)
+            dropped = True
+
+        if not dropped:
+            raise ValueError("drop-index requires --name and/or one or more paths")
+    elif args.command == "indexes":
+        index_map = db.indexes
+        if not index_map:
+            sys.stdout.write("No indexes\n")
+        for name, paths in index_map.items():
+            suffix = " [UNIQUE]" if name.endswith("_UNIQUE") else ""
+            sys.stdout.write(f"{name}{suffix}: {', '.join(paths)}\n")
+    elif args.command == "patch":
+        patchitem = json.loads(args.patch)
+        if not isinstance(patchitem, dict):
+            raise ValueError("--patch must decode to a JSON object")
+        eq_args, eq_kwargs = _parse_cli_eq_filters(args.filters, args.json)
+        db.patch(patchitem, *eq_args, **eq_kwargs)
+    elif args.command == "count":
+        eq_args, eq_kwargs = _parse_cli_eq_filters(args.filters, args.json)
+        sys.stdout.write(str(db.count(*eq_args, **eq_kwargs)) + "\n")
+    elif args.command == "stats":
+        stats_obj = db.stats()
+        sys.stdout.write(f"Database: {stats_obj['dbpath']}\n")
+        sys.stdout.write(f"Table: {stats_obj['table']}\n")
+        sys.stdout.write(f"Rows: {stats_obj['rows']}\n")
+        sys.stdout.write(f"Page Size: {stats_obj['page_size']}\n")
+        sys.stdout.write(f"Page Count: {stats_obj['page_count']}\n")
+        sys.stdout.write(f"Freelist Count: {stats_obj['freelist_count']}\n")
+        sys.stdout.write(f"Bytes: {stats_obj['bytes']}\n")
+        if not stats_obj["indexes"]:
+            sys.stdout.write("Indexes: none\n")
+        else:
+            sys.stdout.write("Indexes:\n")
+            for name, paths in stats_obj["indexes"].items():
+                suffix = " [UNIQUE]" if name.endswith("_UNIQUE") else ""
+                sys.stdout.write(f"  - {name}{suffix}: {', '.join(paths)}\n")
+
+    db.close()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    cli()

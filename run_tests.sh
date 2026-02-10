@@ -1,5 +1,5 @@
-pytest test_jsonlitedb.py \
+pytest tests \
     --cov jsonlitedb \
-    --cov test_jsonlitedb \
+    --cov tests \
     --cov-report term \
     --cov-report html

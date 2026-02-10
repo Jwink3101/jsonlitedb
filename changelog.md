@@ -2,6 +2,13 @@
 
 Newest on top
 
+## 0.3.0 (2026-02-09)
+
+- Refactor including putting CLI into its own
+- Add a lot more to CLI for more control.
+
+Note, much of this was done with the help of ChatGPT and `codex` but all changes were reviewed, modified, and accepted. The refactor and additional CLI was still reviewed but less closely.
+
 ## 0.2.0 (2026-02-09)
 
 - Updated the CLI `insert` interface to allow adding a single item as well. Deprecated older interface but is (currently) still working and backwards compatible. 

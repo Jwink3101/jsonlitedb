@@ -11,7 +11,7 @@ license = { file = "license" }
 authors = [
     { name = "Justin Winokur", email = "Jwink3101@users.noreply.github.com" },
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -23,10 +23,10 @@ Source = "https://github.com/Jwink3101/jsonlitedb"
 Issues = "https://github.com/Jwink3101/jsonlitedb/issues"
 
 [project.scripts]
-jsonlitedb = "jsonlitedb:cli"
+jsonlitedb = "jsonlitedb.cli:cli"
 
 [tool.setuptools]
-py-modules = ["jsonlitedb"]
+packages = ["jsonlitedb"]
 
 [tool.setuptools.dynamic]
 version = { attr = "jsonlitedb.__version__" }

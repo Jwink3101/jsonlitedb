@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-import argparse
 import datetime
 import hashlib
 import io
@@ -19,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "AssignedQueryError",
@@ -33,12 +32,11 @@ __all__ = [
     "Query",
     "QueryResult",
     "Row",
-    "cli",
     "sqlite_quote",
 ]
 
-if sys.version_info < (3, 8):  # pragma: no cover
-    raise ImportError("Must use Python >= 3.8")
+if sys.version_info < (3, 9):  # pragma: no cover
+    raise ImportError("Must use Python >= 3.9")
 
 DEFAULT_TABLE = "items"
 
@@ -51,6 +49,8 @@ def _env_to_bool(name, default="false"):
 # Set this (or JSONLITEDB_DISABLE_REGEX=1) to disable the REGEXP operator.
 # This is useful when query patterns may come from untrusted input.
 DISABLE_REGEX = _env_to_bool("JSONLITEDB_DISABLE_REGEX", "false")
+
+DISABLE_METADATA = _env_to_bool("JSONLITEDB_DISABLE_META", "false")
 
 
 class JSONLiteDB:
@@ -1290,8 +1290,9 @@ class JSONLiteDB:
                 ORDER BY key""",
             ("created", "version"),
         ).fetchall()
-        # Note: ORDER BY keeps results stable for this query.
-        created, version = [i["val"] for i in r]
+        about = {item["key"]: item["val"] for item in r}
+        created = about.get("created", "**MISSING**")
+        version = about.get("version", "**MISSING**")
         return _about_obj(created=created, version=version)
 
     def _init(self, wal_mode=True):
@@ -1326,23 +1327,24 @@ class JSONLiteDB:
                 )"""
                 )
             )
-            # 'key' is PRIMARY KEY so it will be ignored if already there.
-            db.execute(
-                dedent(
-                    f"""
-                INSERT OR IGNORE INTO {self.table}_kv VALUES (?,?)
-                """
-                ),
-                ("created", datetime.datetime.now().astimezone().isoformat()),
-            )
-            db.execute(
-                dedent(
-                    f"""
-                INSERT OR IGNORE INTO {self.table}_kv VALUES (?,?)
-                """
-                ),
-                ("version", f"JSONLiteDB-{__version__}"),
-            )
+            if not DISABLE_METADATA:
+                # 'key' is PRIMARY KEY so it will be ignored if already there.
+                db.execute(
+                    dedent(
+                        f"""
+                    INSERT OR IGNORE INTO {self.table}_kv VALUES (?,?)
+                    """
+                    ),
+                    ("created", datetime.datetime.now().astimezone().isoformat()),
+                )
+                db.execute(
+                    dedent(
+                        f"""
+                    INSERT OR IGNORE INTO {self.table}_kv VALUES (?,?)
+                    """
+                    ),
+                    ("version", f"JSONLiteDB-{__version__}"),
+                )
 
         if wal_mode:
             try:
@@ -1431,7 +1433,9 @@ class JSONLiteDB:
         Close the underlying SQLite connection.
         """
         logger.debug("close")
-        self.db.close()
+        db = getattr(self, "db", None)
+        if db is not None:
+            db.close()
 
     __del__ = close
 
@@ -2212,389 +2216,3 @@ def translate(mystr, reps):
     for key, val in reps.items():
         mystr = mystr.replace(key, str(val))
     return mystr
-
-
-###################################################
-## CLI Utils
-###################################################
-class _AppendInsertInput(argparse.Action):
-    """
-    Record `insert` input sources in the exact order they appear on argv.
-
-    The `insert` command can combine `--stdin`, `--file`, and `--json`.
-    This action appends `(source_kind, payload)` tuples so execution can follow
-    command-line order deterministically.
-
-    Notes
-    -----
-    Positional insert inputs are deprecated and are appended after all flagged
-    inputs for backward compatibility.
-    """
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        inputs = getattr(namespace, self.dest, None)
-        if inputs is None:
-            inputs = []
-        kind = option_string.lstrip("-")
-        payload = None if values == [] else values
-        inputs.append((kind, payload))
-        setattr(namespace, self.dest, inputs)
-
-
-def _json_dump_line(item):
-    """
-    Encode an item as compact single-line JSON for CLI streaming output.
-    """
-    return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
-
-
-def parse_cli_filter_value(text):
-    """
-    Parse CLI filter text as JSON, falling back to raw string on parse failure.
-    """
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return text
-
-
-def cli():
-    """Entry point for the JSONLiteDB command-line interface."""
-    from textwrap import dedent
-
-    desc = dedent(
-        """
-        Command-line tool for inserting JSON/JSONL into a JSONLiteDB (SQLite) file.
-
-        Input is treated as JSON Lines (one JSON value per line). Files ending in
-        .json are parsed as full JSON; .jsonl and .ndjson files are read line-by-line.
-        """
-    )
-
-    parser = argparse.ArgumentParser(description=desc)
-
-    global_parent = argparse.ArgumentParser(add_help=False)
-    global_parent.add_argument(
-        "--table",
-        default="items",
-        metavar="NAME",
-        help="Table Name. Default: '%(default)s'",
-    )
-
-    parser.add_argument(
-        "-v",
-        "--version",
-        action="version",
-        version="%(prog)s-" + __version__,
-    )
-    subparser = parser.add_subparsers(
-        dest="command",
-        title="Commands",
-        required=True,
-        # metavar="",
-        description="Run `%(prog)s <command> -h` for help",
-    )
-
-    load = subparser.add_parser(
-        "insert",
-        parents=[global_parent],
-        help="insert JSON into a JSONLiteDB database",
-    )
-
-    load.add_argument(
-        "--duplicates",
-        choices={"replace", "ignore"},
-        default=False,
-        help=(
-            'How to handle "UNIQUE" constraint conflicts. If omitted, conflicts '
-            "raise an error."
-        ),
-    )
-
-    load.add_argument("dbpath", help="JSONLiteDB file")
-    input_group = load.add_argument_group(
-        "Input sources",
-        dedent(
-            """
-            Input sources are processed in command-line order for flagged inputs.
-            Deprecated positional inputs are processed after all flagged inputs.
-            """
-        ),
-    )
-    input_group.add_argument(
-        "--stdin",
-        nargs=0,
-        action=_AppendInsertInput,
-        dest="inputs",
-        help="Read JSON or JSONL from stdin. See --stdin-format",
-    )
-    input_group.add_argument(
-        "--file",
-        action=_AppendInsertInput,
-        dest="inputs",
-        metavar="PATH",
-        help="""
-            JSON/JSONL file input. Files ending in '.jsonl' or '.ndjson' 
-            are read line-by-line.
-            Files ending in '.json' are loaded as a full JSON value (single
-            item or array of items).
-        """,
-    )
-    input_group.add_argument(
-        "--json",
-        action=_AppendInsertInput,
-        dest="inputs",
-        metavar="ITEM",
-        help="""Single JSON item to add. Example: --json '{"first":"Jim","last":"Kim"}'""",
-    )
-    input_group.add_argument(
-        "--stdin-format",
-        choices=("json", "jsonlines"),
-        default="jsonlines",
-        help="Format to expect for --stdin. Default: '%(default)s'",
-    )
-    load.add_argument(
-        "legacy_inputs",
-        nargs="*",
-        metavar="FILE_OR_DASH",
-        help="""
-            Deprecated positional input(s) from older CLI usage. Use --file/--stdin
-            instead. Positional inputs are processed after all flagged inputs.
-        """,
-    )
-
-    dump = subparser.add_parser(
-        "dump",
-        help="dump database to JSONL",
-        parents=[global_parent],
-        description="Dump a JSONLiteDB table to JSONL or full SQL.",
-    )
-
-    dump.add_argument("dbpath", help="JSONLiteDB file")
-
-    dump.add_argument(
-        "--output",
-        default="-",
-        help="""
-            Output file path. Use '-' (default) to write to stdout.
-        """,
-    )
-    dump.add_argument(
-        "--file-mode",
-        choices=("a", "w"),
-        default="w",
-        dest="mode",
-        help="File mode for --output",
-    )
-
-    dump.add_argument(
-        "--sql",
-        action="store_true",
-        help="""
-            Emit a full SQL dump including tables and indexes (like `.dump` in
-            the sqlite3 shell).
-        """,
-    )
-
-    query_desc = dedent(
-        """
-        Query rows and emit matching JSON Lines.
-
-        Filters are limited to equality expressions and are combined with AND.
-        """
-    )
-    query_epilog = dedent(
-        """
-        Examples:
-          jsonlitedb query my.db name=George
-          jsonlitedb query my.db '$.meta.rank=7' active=true --limit 5
-          jsonlitedb query my.db --json='{"active": true, "rank": 7}'
-          jsonlitedb query my.db --orderby=last --orderby=-born
-          jsonlitedb query my.db key2=myquery --orderby=-meta,rank
-          jsonlitedb query my.db active=true rank=7 score=1.5 tags='["a","b"]'
-
-        Notes:
-          `query` supports simple equality filters and path-based sorting only.
-          Use Python `JSONLiteDB.query(...)` for OR/NOT, inequalities, LIKE/GLOB/REGEXP,
-          and other advanced query composition.
-        """
-    )
-    query = subparser.add_parser(
-        "query",
-        help="query database and emit JSONL",
-        parents=[global_parent],
-        description=query_desc,
-        epilog=query_epilog,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    query.add_argument("dbpath", help="JSONLiteDB file")
-    query.add_argument(
-        "filters",
-        nargs="*",
-        help="Filters in key=value form (values parsed as JSON when possible)",
-    )
-    query.add_argument(
-        "--json",
-        action="append",
-        default=None,
-        metavar="OBJECT",
-        help=(
-            "JSON object equality filter; repeatable. Each object is expanded "
-            "into ANDed key=value filters."
-        ),
-    )
-    query.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Limit results to N rows",
-    )
-    query.add_argument(
-        "--format",
-        choices=("jsonl", "json", "count"),
-        default="jsonl",
-        help="""
-            Output format. 
-            Note that 'json' still does one item per line but is valid JSON as a whole. 
-            Default: '%(default)s'""",
-    )
-    query.add_argument(
-        "--orderby",
-        action="append",
-        default=None,
-        help=(
-            "Order by key or JSON path; repeatable. Use commas to denote nested "
-            "paths (e.g., --orderby name --orderby=-age --orderby=-parent,child)."
-        ),
-    )
-    args = parser.parse_args()
-    db = JSONLiteDB(args.dbpath, table=args.table)
-
-    if args.command == "insert":
-
-        def _insert_parsed_json(value):
-            if isinstance(value, list):
-                db.insertmany(value, duplicates=args.duplicates)
-            else:
-                db.insert(value, duplicates=args.duplicates)
-
-        def _insert_jsonlines(fp):
-            # Do this as a series of generators so we can use insertmany for
-            # better performance
-            lines = (line.strip() for line in fp)
-            lines = (line for line in lines if line not in "[]")
-            lines = (line.rstrip(",") for line in lines)
-            db.insertmany(lines, _dump=False, duplicates=args.duplicates)
-
-        inputs = list(args.inputs or [])
-        if args.legacy_inputs:
-            sys.stderr.write(
-                "Deprecation warning: positional insert inputs are deprecated; "
-                "use --file/--stdin. Positional inputs are processed last.\n"
-            )
-            inputs.extend([("legacy", item) for item in args.legacy_inputs])
-        if not inputs:
-            inputs = [("stdin", None)]
-
-        read_stdin = False
-        for source, payload in inputs:
-            if source == "json":
-                _insert_parsed_json(json.loads(payload))
-                continue
-
-            if source == "stdin" or (source == "legacy" and payload == "-"):
-                if read_stdin:
-                    continue
-                read_stdin = True
-                if args.stdin_format == "json":
-                    _insert_parsed_json(json.load(sys.stdin))
-                else:
-                    _insert_jsonlines(sys.stdin)
-                continue
-
-            file = payload
-            if file.lower().endswith(".json"):
-                with open(file, "rt") as fp:
-                    _insert_parsed_json(json.load(fp))
-            else:
-                with open(file, "rt") as fp:
-                    _insert_jsonlines(fp)
-    elif args.command == "dump":
-        try:
-            fp = (
-                open(args.output, mode=f"{args.mode}t")
-                if args.output != "-"
-                else sys.stdout
-            )
-            if args.sql:
-                for line in db.db.iterdump():
-                    fp.write(line + "\n")
-            else:
-                for line in db.items(_load=False):
-                    fp.write(line + "\n")
-        finally:
-            fp.close()
-    elif args.command == "query":
-        eq_args = []
-        eq_kwargs = {}
-
-        def _add_eq_filter(key, val):
-            if key.startswith("$"):
-                eq_args.append({key: val})
-            else:
-                eq_kwargs[key] = val
-
-        for filt in args.filters:
-            if "=" not in filt:
-                raise ValueError(f"Invalid filter {filt!r}. Use key=value.")
-            key, val = tuple(kv.strip() for kv in filt.split("=", 1))
-            val = parse_cli_filter_value(val)
-
-            _add_eq_filter(key, val)
-
-        for json_filter in args.json or []:
-            filt = json.loads(json_filter)
-            if not isinstance(filt, dict):
-                raise ValueError("--json filters must decode to JSON objects")
-            for key, val in filt.items():
-                _add_eq_filter(str(key), val)
-
-        q_kwargs = {}
-        if args.limit is not None:
-            q_kwargs["_limit"] = args.limit
-        if args.orderby:
-            orderby = []
-            for item in args.orderby:
-                parts = [p.strip() for p in item.split(",") if p.strip()]
-                if len(parts) > 1:
-                    orderby.append(tuple(parts))
-                else:
-                    orderby.append(parts[0])
-            q_kwargs["_orderby"] = orderby
-
-        if args.format == "count":
-            count = db.count(*eq_args, **eq_kwargs, **q_kwargs)
-            sys.stdout.write(str(count) + "\n")
-            db.close()
-            return
-
-        if args.format == "json":
-            sys.stdout.write("[\n")
-        first = True
-        for item in db.query(*eq_args, **eq_kwargs, **q_kwargs):
-            if args.format == "jsonl":
-                sys.stdout.write(_json_dump_line(item) + "\n")
-            else:
-                if not first:
-                    sys.stdout.write(",\n")
-                sys.stdout.write(_json_dump_line(item))
-                first = False
-        if args.format == "json":
-            sys.stdout.write("\n]\n")
-
-    db.close()
-
-
-if __name__ == "__main__":  # pragma: no cover
-    cli()

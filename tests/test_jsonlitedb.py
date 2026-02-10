@@ -23,9 +23,9 @@ from jsonlitedb import (
     Query,
     Row,
     cli,
-    parse_cli_filter_value,
-    sqlite_quote,
 )
+from jsonlitedb import jsonlitedb as core
+from jsonlitedb import parse_cli_filter_value, sqlite_quote
 
 
 def test_JSONLiteDB_general():
@@ -831,40 +831,38 @@ def test_Query():
     with pytest.raises(DissallowedError):
         Query()[1] = 100
 
-    # For these tests, jsonlitedb.translate the fill but this WILL NOT BE THE REAL QUERY. It will
+    # For these tests, core.translate the fill but this WILL NOT BE THE REAL QUERY. It will
     # later be replaced with question marks
     q = Query().a == 10
     assert (
-        jsonlitedb.translate(q._query, q._qdict)
-        == "( JSON_EXTRACT(data, '$.\"a\"') = 10 )"
+        core.translate(q._query, q._qdict) == "( JSON_EXTRACT(data, '$.\"a\"') = 10 )"
     )
 
     q = Query().a < 10
     assert (
-        jsonlitedb.translate(q._query, q._qdict)
-        == "( JSON_EXTRACT(data, '$.\"a\"') < 10 )"
+        core.translate(q._query, q._qdict) == "( JSON_EXTRACT(data, '$.\"a\"') < 10 )"
     )
 
     q1 = Query().a["b"] < 10
     q2 = Query()["a", "b"] < 10
     q3 = Query()["a"].b < 10
     assert (
-        jsonlitedb.translate(q1._query, q1._qdict)
-        == jsonlitedb.translate(q2._query, q2._qdict)
-        == jsonlitedb.translate(q3._query, q3._qdict)
+        core.translate(q1._query, q1._qdict)
+        == core.translate(q2._query, q2._qdict)
+        == core.translate(q3._query, q3._qdict)
         == '( JSON_EXTRACT(data, \'$."a"."b"\') < 10 )'
     )
 
     q = (Query().a < "A") | (Query().b < "B")
     assert (
-        jsonlitedb.translate(q._query, q._qdict)
+        core.translate(q._query, q._qdict)
         == "( ( JSON_EXTRACT(data, '$.\"a\"') < A ) OR ( JSON_EXTRACT(data, '$.\"b\"') < B ) )"
     )
 
     q = (Query().a < "A") | (Query().b == "B") & (
         (Query().c != "C") | ~(Query().d >= "D")
     )
-    assert jsonlitedb.translate(q._query, q._qdict) == (
+    assert core.translate(q._query, q._qdict) == (
         "( ( JSON_EXTRACT(data, '$.\"a\"') < A ) "
         "OR ( ( JSON_EXTRACT(data, '$.\"b\"') = B ) "
         "AND ( ( JSON_EXTRACT(data, '$.\"c\"') != C ) "
@@ -878,7 +876,7 @@ def test_Query():
     q = Query().a > "A"
     q |= Query().b < "B"
     assert (
-        jsonlitedb.translate(q._query, q._qdict)
+        core.translate(q._query, q._qdict)
         == "( ( JSON_EXTRACT(data, '$.\"a\"') > A ) OR ( JSON_EXTRACT(data, '$.\"b\"') < B ) )"
     )
 
@@ -890,7 +888,7 @@ def test_Query():
         else:
             q = Query._from_equality(key, val)
     assert (
-        jsonlitedb.translate(q._query, q._qdict)
+        core.translate(q._query, q._qdict)
         == "( ( JSON_EXTRACT(data, '$.\"val1\"') = val1 ) AND ( JSON_EXTRACT(data, '$.\"val2\"') = val2 ) )"
     )
 
@@ -928,22 +926,22 @@ def test_query_args():
     import pytest
 
     with pytest.raises(ValueError):
-        jsonlitedb._query_tuple2jsonpath({frozenset(("key", "subkey", 3)): "val"})
+        core._query_tuple2jsonpath({frozenset(("key", "subkey", 3)): "val"})
 
     assert (
-        jsonlitedb._query_tuple2jsonpath(key="val")
-        == jsonlitedb._query_tuple2jsonpath({"key": "val"})
+        core._query_tuple2jsonpath(key="val")
+        == core._query_tuple2jsonpath({"key": "val"})
         == {'$."key"': "val"}
     )
     assert (
-        jsonlitedb._query_tuple2jsonpath({1: "val"})
-        == jsonlitedb._query_tuple2jsonpath({(1,): "val"})
+        core._query_tuple2jsonpath({1: "val"})
+        == core._query_tuple2jsonpath({(1,): "val"})
         == {"$[1]": "val"}
     )  # Include first of a tuple
-    assert jsonlitedb._query_tuple2jsonpath({("key", "subkey"): "val"}) == {
+    assert core._query_tuple2jsonpath({("key", "subkey"): "val"}) == {
         '$."key"."subkey"': "val"
     }  # Notice it's quoted
-    assert jsonlitedb._query_tuple2jsonpath(
+    assert core._query_tuple2jsonpath(
         {
             ("key",): "val",
             ("key", 1): "val",
@@ -966,7 +964,7 @@ def test_query_args():
     }
 
     # non-dicts
-    assert jsonlitedb._query_tuple2jsonpath("key", '$."key"', ("key", "subkey")) == {
+    assert core._query_tuple2jsonpath("key", '$."key"', ("key", "subkey")) == {
         '$."key"': None,
         '$."key"."subkey"': None,
     }
@@ -975,25 +973,25 @@ def test_query_args():
 def test_build_index_paths():
     import pytest
 
-    assert jsonlitedb.build_index_paths("key") == ['$."key"']
-    assert jsonlitedb.build_index_paths("key1", "key2") == [
+    assert core.build_index_paths("key") == ['$."key"']
+    assert core.build_index_paths("key1", "key2") == [
         '$."key1"',
         '$."key2"',
     ]
-    assert jsonlitedb.build_index_paths("key", ("key", "subkey"), "$.key2.sub2") == [
+    assert core.build_index_paths("key", ("key", "subkey"), "$.key2.sub2") == [
         '$."key"',
         '$."key"."subkey"',
         "$.key2.sub2",
     ]
-    assert jsonlitedb.build_index_paths(
+    assert core.build_index_paths(
         Query().key, Query().key.subkey, Query()[2], Query().key[3], Query().key.sub[1]
     ) == ['$."key"', '$."key"."subkey"', "$[2]", '$."key"[3]', '$."key"."sub"[1]']
 
     with pytest.raises(AssignedQueryError):
-        jsonlitedb.build_index_paths(Query().key == "val")
+        core.build_index_paths(Query().key == "val")
 
     with pytest.raises(AssignedQueryError):
-        jsonlitedb.build_index_paths({"key": "val"})
+        core.build_index_paths({"key": "val"})
 
 
 def test_query2sql():
@@ -1040,15 +1038,15 @@ def test_query_placeholder_token_in_path():
 
 
 def test_disable_regex():
-    old_disable = jsonlitedb.DISABLE_REGEX
-    jsonlitedb.DISABLE_REGEX = True
+    old_disable = core.DISABLE_REGEX
+    core.DISABLE_REGEX = True
     try:
         db = JSONLiteDB(":memory:")
         db.insert({"a": "TE.ST"})
         with pytest.raises(sqlite3.OperationalError, match="no such function: REGEXP"):
             db.query(db.Q.a @ "TE.ST").all()
     finally:
-        jsonlitedb.DISABLE_REGEX = old_disable
+        core.DISABLE_REGEX = old_disable
 
 
 def test_init_handles_missing_metadata_table():
@@ -1075,6 +1073,27 @@ def test_init_reraises_unexpected_operational_error():
             JSONLiteDB(":memory:")
     finally:
         JSONLiteDB.about = old_about
+
+
+def test_disable_metadata_env_var(tmp_path, monkeypatch):
+    dbpath = tmp_path / "nometa.db"
+    old_disable_metadata = core.DISABLE_METADATA
+    monkeypatch.setattr(core, "DISABLE_METADATA", True)
+
+    try:
+        db = JSONLiteDB(dbpath)
+        db.insert({"x": 1})
+
+        rows = db.execute(f"SELECT key,val FROM {db.table}_kv ORDER BY key").fetchall()
+        assert rows == []
+        assert db.about() == ("**MISSING**", "**MISSING**")
+
+        # Re-open and verify missing metadata rows do not break initialization.
+        db = JSONLiteDB(dbpath)
+        assert db.count() == 1
+        assert db.about() == ("**MISSING**", "**MISSING**")
+    finally:
+        core.DISABLE_METADATA = old_disable_metadata
 
 
 def test_build_orderby_pairs():
@@ -1125,57 +1144,57 @@ def test_build_orderby_pairs():
     ]
 
     for input_value, expected in tests:
-        assert jsonlitedb.build_orderby_pairs(input_value) == expected
+        assert core.build_orderby_pairs(input_value) == expected
 
     # Catch edge cases
-    assert jsonlitedb.build_orderby_pairs(None) == ""
+    assert core.build_orderby_pairs(None) == ""
 
     with pytest.raises(ValueError):
-        jsonlitedb.build_orderby_pairs(db.Q.key == "val")
+        core.build_orderby_pairs(db.Q.key == "val")
     with pytest.raises(ValueError):
-        jsonlitedb.build_orderby_pairs([tuple()])
+        core.build_orderby_pairs([tuple()])
     with pytest.raises(ValueError):
-        jsonlitedb.build_orderby_pairs(object())
+        core.build_orderby_pairs(object())
 
 
 def test_split_query():
     assert (
         ("a",)
-        == jsonlitedb.split_query("a")
-        == jsonlitedb.split_query(Q().a)
-        == jsonlitedb.split_query(("a",))
+        == core.split_query("a")
+        == core.split_query(Q().a)
+        == core.split_query(("a",))
     )
     assert (
         ("a", "b")
-        == jsonlitedb.split_query("$.a.b")
-        == jsonlitedb.split_query('$."a"."b"')
-        == jsonlitedb.split_query(("a", "b"))
-        == jsonlitedb.split_query(Q().a.b)
-        == jsonlitedb.split_query(Q().a["b"])
+        == core.split_query("$.a.b")
+        == core.split_query('$."a"."b"')
+        == core.split_query(("a", "b"))
+        == core.split_query(Q().a.b)
+        == core.split_query(Q().a["b"])
     )
     assert (
         ("a", 1)
-        == jsonlitedb.split_query("$.a[1]")
-        == jsonlitedb.split_query('$."a"[1]')
-        == jsonlitedb.split_query(("a", 1))
-        == jsonlitedb.split_query(Q().a[1])
+        == core.split_query("$.a[1]")
+        == core.split_query('$."a"[1]')
+        == core.split_query(("a", 1))
+        == core.split_query(Q().a[1])
     )
     assert (
         ("a", 1)
-        == jsonlitedb.split_query("$.a[1]")
-        == jsonlitedb.split_query('$."a"[1]')
-        == jsonlitedb.split_query(("a", 1))
-        == jsonlitedb.split_query(Q().a[1])
+        == core.split_query("$.a[1]")
+        == core.split_query('$."a"[1]')
+        == core.split_query(("a", 1))
+        == core.split_query(Q().a[1])
     )
 
-    assert ("a", "b", 1) == jsonlitedb.split_query(Q().a.b[1])
+    assert ("a", "b", 1) == core.split_query(Q().a.b[1])
 
-    assert jsonlitedb.split_query(Q()[1]) == (1,)
-    assert jsonlitedb.split_query(Q()[1].a) == (1, "a")
-    assert jsonlitedb.split_query(Q().a[1][2]) == ("a", 1, 2)
-    assert jsonlitedb.split_query(Q().a[1].b[2]) == ("a", 1, "b", 2)
+    assert core.split_query(Q()[1]) == (1,)
+    assert core.split_query(Q()[1].a) == (1, "a")
+    assert core.split_query(Q().a[1][2]) == ("a", 1, 2)
+    assert core.split_query(Q().a[1].b[2]) == ("a", 1, "b", 2)
     g = ("a", 1, "b", 2, "c", 3, 4, 5, "six", 7, "eight", 9)
-    assert jsonlitedb.split_query(Q().a[1].b[2].c[3, 4][5]["six", 7].eight[9]) == g
+    assert core.split_query(Q().a[1].b[2].c[3, 4][5]["six", 7].eight[9]) == g
 
 
 def test_Row():
@@ -1207,46 +1226,46 @@ def test_Row():
 
 
 def test_listify():
-    assert jsonlitedb.listify(None) == []
-    assert jsonlitedb.listify(["a"]) == jsonlitedb.listify("a") == ["a"]
+    assert core.listify(None) == []
+    assert core.listify(["a"]) == core.listify("a") == ["a"]
     l = ["a", "b", "c"]
-    assert jsonlitedb.listify(l) == l
-    assert jsonlitedb.listify(l) is l
+    assert core.listify(l) == l
+    assert core.listify(l) is l
 
-    assert jsonlitedb.listify((1, 2)) == [1, 2]
-    assert jsonlitedb.listify((1, 2), expand_tuples=True) == [1, 2]
-    assert jsonlitedb.listify((1, 2), expand_tuples=False) == [(1, 2)]
+    assert core.listify((1, 2)) == [1, 2]
+    assert core.listify((1, 2), expand_tuples=True) == [1, 2]
+    assert core.listify((1, 2), expand_tuples=False) == [(1, 2)]
 
 
 def test_group_ints_with_preceding_string():
-    assert jsonlitedb.group_ints_with_preceding_string([1, 2]) == [[1, 2]]
-    assert jsonlitedb.group_ints_with_preceding_string(["a", "b"]) == [["a"], ["b"]]
-    assert jsonlitedb.group_ints_with_preceding_string(["a", 1, 2, 3, "b"]) == [
+    assert core.group_ints_with_preceding_string([1, 2]) == [[1, 2]]
+    assert core.group_ints_with_preceding_string(["a", "b"]) == [["a"], ["b"]]
+    assert core.group_ints_with_preceding_string(["a", 1, 2, 3, "b"]) == [
         ["a", 1, 2, 3],
         ["b"],
     ]
-    assert jsonlitedb.group_ints_with_preceding_string([1, 2, 3, "b"]) == [
+    assert core.group_ints_with_preceding_string([1, 2, 3, "b"]) == [
         [1, 2, 3],
         ["b"],
     ]
-    assert jsonlitedb.group_ints_with_preceding_string(["a", "b", 1, 2, "3", 4]) == [
+    assert core.group_ints_with_preceding_string(["a", "b", 1, 2, "3", 4]) == [
         ["a"],
         ["b", 1, 2],
         ["3", 4],
     ]
     # Example ones
-    assert jsonlitedb.group_ints_with_preceding_string
-    assert jsonlitedb.group_ints_with_preceding_string(["A", "B", "C"]) == [
+    assert core.group_ints_with_preceding_string
+    assert core.group_ints_with_preceding_string(["A", "B", "C"]) == [
         ["A"],
         ["B"],
         ["C"],
     ]  # Nothing
-    assert jsonlitedb.group_ints_with_preceding_string(["A", 1, "B", 2, 3, "C"]) == [
+    assert core.group_ints_with_preceding_string(["A", 1, "B", 2, 3, "C"]) == [
         ["A", 1],
         ["B", 2, 3],
         ["C"],
     ]
-    assert jsonlitedb.group_ints_with_preceding_string([1, 2, "A", "B", 3]) == [
+    assert core.group_ints_with_preceding_string([1, 2, "A", "B", 3]) == [
         [1, 2],
         ["A"],
         ["B", 3],
@@ -1279,18 +1298,31 @@ def test_parse_cli_filter_value():
     assert parse_cli_filter_value("jsonl") == "jsonl"
 
 
+def test_raise_cli_integrity_error_generic():
+    with (
+        pytest.raises(SystemExit) as exc,
+        contextlib.redirect_stderr(io.StringIO()) as err_out,
+    ):
+        jsonlitedb._raise_cli_integrity_error(
+            sqlite3.IntegrityError("FOREIGN KEY constraint failed"),
+            command="insert",
+        )
+    assert exc.value.code == 1
+    assert err_out.getvalue() == "Integrity error: FOREIGN KEY constraint failed\n"
+
+
 def test_split_no_double_quotes():
-    assert jsonlitedb.split_no_double_quotes("a.b.c", ".") == ["a", "b", "c"]
-    assert jsonlitedb.split_no_double_quotes('a."b.c"', ".") == ["a", '"b.c"']
-    assert jsonlitedb.split_no_double_quotes('"a.b.c"', ".") == ['"a.b.c"']
-    assert jsonlitedb.split_no_double_quotes('"a.b.c', ".") == ['"a.b.c']
-    assert jsonlitedb.split_no_double_quotes('"a.b"".c"', ".") == ['"a.b"".c"']
-    assert jsonlitedb.split_no_double_quotes(r'"a.\"b\".c".d', ".") == [
+    assert core.split_no_double_quotes("a.b.c", ".") == ["a", "b", "c"]
+    assert core.split_no_double_quotes('a."b.c"', ".") == ["a", '"b.c"']
+    assert core.split_no_double_quotes('"a.b.c"', ".") == ['"a.b.c"']
+    assert core.split_no_double_quotes('"a.b.c', ".") == ['"a.b.c']
+    assert core.split_no_double_quotes('"a.b"".c"', ".") == ['"a.b"".c"']
+    assert core.split_no_double_quotes(r'"a.\"b\".c".d', ".") == [
         r'"a.\"b\".c"',
         "d",
     ]
     with pytest.raises(ValueError, match="Delimiter cannot be empty"):
-        jsonlitedb.split_no_double_quotes("a.b", "")
+        core.split_no_double_quotes("a.b", "")
 
 
 def test_non_dicts():
@@ -1327,490 +1359,3 @@ def test_non_dicts():
         "ix_items_c3e97dd6_UNIQUE": ["$"],
         "ix_items_ef1046ca": ["$[1]"],
     }
-
-
-class MockArgv:
-    def __init__(self, argv, *, stdin=None, shift=0):
-        self.argv = argv
-        self.shift = shift
-        self.stdin = stdin
-
-    def __enter__(self):
-        self.argv_store = sys.argv
-        argv = sys.argv[: self.shift]
-        argv.extend(self.argv)
-        sys.argv = argv
-
-        if self.stdin:
-            self.stdin_store = sys.stdin
-            sys.stdin = self.stdin
-
-        return self
-
-    def __exit__(self, *_):
-        sys.argv = self.argv_store
-
-        if self.stdin:
-            sys.stdin = self.stdin_store
-
-        return self
-
-
-def test_cli_insert_defaults_to_stdin():
-    dbpath = "!!!TMP!!!defaultstdin.db"
-    Path(dbpath).unlink(missing_ok=True)
-
-    try:
-        stdin = io.StringIO('{"name":"defaultstdin","ii":99}\n')
-        with MockArgv(["insert", dbpath, "--table", "cli"], stdin=stdin, shift=1):
-            cli()
-
-        db = JSONLiteDB(dbpath, table="cli")
-        try:
-            assert db.query_one(name="defaultstdin")["ii"] == 99
-        finally:
-            db.close()
-    finally:
-        Path(dbpath).unlink(missing_ok=True)
-
-
-def test_cli_query_format_edges():
-    dbpath = "!!!TMP!!!queryedges.db"
-    Path(dbpath).unlink(missing_ok=True)
-
-    try:
-        db = JSONLiteDB(dbpath, table="cli")
-        db.insert({"a": 1}, "scalar")
-        db.close()
-
-        with MockArgv(
-            ["query", dbpath, "--table", "cli", "--json=[1,2,3]"],
-            shift=1,
-        ):
-            with pytest.raises(
-                ValueError, match="--json filters must decode to JSON objects"
-            ):
-                cli()
-
-        # count should honor --limit and agree with row output size
-        query_out = io.StringIO()
-        with MockArgv(
-            ["query", dbpath, "--table", "cli", "--format", "count", "--limit", "1"],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        assert query_out.getvalue().strip() == "1"
-    finally:
-        Path(dbpath).unlink(missing_ok=True)
-
-
-def test_cli():
-    # Need to test .json, .jsonl, and one-item-per-line json (likely mislabeled jsonl
-    # or stdin)
-    dbpath = "!!!TMP!!!my.db"
-    file1 = "!!!TMP!!!file1.JSON"
-    file2 = "!!!TMP!!!file2.jsonl"
-    file3 = "!!!TMP!!!file3.jsonl"
-    file4 = "!!!TMP!!!file4.ndjson"
-    dump = "!!!TMP!!!dump.jsonl"
-    dump2 = "!!!TMP!!!dump.sql"
-
-    Path(dbpath).unlink(missing_ok=True)
-
-    try:
-        db = JSONLiteDB(dbpath, table="cli")
-        db.create_index("name", unique=True)
-
-        # one-item-per-line json
-        stdin = io.StringIO()
-        stdin.write("[\n")
-        stdin.write(
-            ",\n".join(
-                [
-                    json.dumps(item)
-                    for item in [
-                        {"name": "test1", "key0": "stdin", "ii": 0},
-                        {"name": "test2", "key0": "stdin", "ii": 1},
-                        {"name": "test3", "key0": "stdin", "ii": 2},
-                    ]
-                ]
-            )
-        )
-        stdin.write("\n]")
-        stdin.seek(0)
-
-        with MockArgv(
-            ["insert", "--table", "cli", dbpath, "-", "-"], stdin=stdin, shift=1
-        ):
-            cli()
-
-        assert len(db) == 3
-
-        # Regular json
-        Path(file1).write_text(
-            json.dumps(
-                [
-                    {"name": "test1", "key1": "json", "ii": 3},
-                    {"name": "test4", "key1": "json", "ii": 4},
-                    {"name": "test5", "key1": "json", "ii": 5},
-                ]
-            )
-        )
-        with MockArgv(
-            ["insert", dbpath, file1, "--table", "cli", "--duplicates", "ignore"],
-            shift=1,
-        ):
-            cli()
-
-        assert len(db) == 5
-        dup = db.query_one(name="test1")
-        assert dup["key0"] == "stdin"
-        assert dup["ii"] == 0
-        assert "key1" not in dup
-
-        # json lines
-        with open(file2, "wt") as fp:
-            print(
-                json.dumps(
-                    {"name": "test1", "key2": "jsonl", "ii": 6, "meta": {"rank": 1}}
-                ),
-                file=fp,
-            )
-            print(
-                json.dumps(
-                    {"name": "test7", "key2": "jsonl", "ii": 7, "meta": {"rank": 7}}
-                ),
-                file=fp,
-            )
-            print(
-                json.dumps(
-                    {"name": "test8", "key2": "jsonl", "ii": 8, "meta": {"rank": 8}}
-                ),
-                file=fp,
-            )
-
-        with MockArgv(
-            ["insert", dbpath, file2, "--table", "cli", "--duplicates", "replace"],
-            shift=1,
-        ):
-            cli()
-
-        assert len(db) == 7
-        dup = db.query_one(name="test1")
-        assert dup["key2"] == "jsonl"
-        assert dup["ii"] == 6
-        assert "key0" not in dup
-        assert "key1" not in dup
-
-        with MockArgv(
-            [
-                "insert",
-                dbpath,
-                "--table",
-                "cli",
-                "--json",
-                '{"name":"test9","key3":"inline","ii":9}',
-            ],
-            shift=1,
-        ):
-            cli()
-        assert db.query_one(name="test9")["key3"] == "inline"
-
-        stdin = io.StringIO('{"name":"test10","key3":"stdin-json","ii":10}')
-        with MockArgv(
-            [
-                "insert",
-                dbpath,
-                "--table",
-                "cli",
-                "--stdin",
-                "--stdin-format",
-                "json",
-            ],
-            stdin=stdin,
-            shift=1,
-        ):
-            cli()
-        assert db.query_one(name="test10")["key3"] == "stdin-json"
-
-        Path(file3).write_text(
-            json.dumps({"name": "ordercheck", "src": "legacy", "ii": 2})
-        )
-        with MockArgv(
-            [
-                "insert",
-                dbpath,
-                "--table",
-                "cli",
-                "--duplicates",
-                "replace",
-                "--json",
-                '{"name":"ordercheck","src":"flag","ii":1}',
-                file3,
-            ],
-            shift=1,
-        ):
-            with contextlib.redirect_stderr(io.StringIO()) as err_out:
-                cli()
-        assert "positional insert inputs are deprecated" in err_out.getvalue()
-        assert db.query_one(name="ordercheck")["src"] == "legacy"
-
-        with open(file4, "wt") as fp:
-            print(json.dumps({"name": "test11", "key4": "ndjson", "ii": 11}), file=fp)
-        with MockArgv(
-            ["insert", dbpath, "--table", "cli", "--file", file4],
-            shift=1,
-        ):
-            cli()
-        assert db.query_one(name="test11")["key4"] == "ndjson"
-
-        with MockArgv(["dump", dbpath, "--table", "cli", "--output", dump], shift=1):
-            cli()
-        dumpout = Path(dump).read_text().strip()
-        assert len(dumpout.split("\n")) == 11
-
-        with MockArgv(["dump", dbpath, "--sql", "--output", dump2], shift=1):
-            cli()
-
-        query_out = io.StringIO()
-        with MockArgv(["query", dbpath, "--table", "cli", "name=test7"], shift=1):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        query_rows = [
-            json.loads(line) for line in query_out.getvalue().strip().splitlines()
-        ]
-        assert query_rows == [
-            {"name": "test7", "key2": "jsonl", "ii": 7, "meta": {"rank": 7}}
-        ]
-
-        query_out = io.StringIO()
-        with MockArgv(
-            [
-                "query",
-                dbpath,
-                "--table",
-                "cli",
-                "--orderby=-ii",
-                "--limit",
-                "2",
-                "key2 = jsonl",  # Spaces testing too
-            ],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        query_rows = [
-            json.loads(line) for line in query_out.getvalue().strip().splitlines()
-        ]
-        assert [row["ii"] for row in query_rows] == [8, 7]
-
-        query_out = io.StringIO()
-        with MockArgv(
-            [
-                "query",
-                dbpath,
-                "--table",
-                "cli",
-                "--orderby=-meta,rank",
-                "--limit",
-                "2",
-                "key2=jsonl",
-            ],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        query_rows = [
-            json.loads(line) for line in query_out.getvalue().strip().splitlines()
-        ]
-        assert [row["name"] for row in query_rows] == ["test8", "test7"]
-
-        query_out = io.StringIO()
-        with MockArgv(
-            ["query", dbpath, "--table", "cli", "$.meta.rank=7"],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        query_rows = [
-            json.loads(line) for line in query_out.getvalue().strip().splitlines()
-        ]
-        assert [row["name"] for row in query_rows] == ["test7"]
-
-        query_out = io.StringIO()
-        with MockArgv(
-            ["query", dbpath, "--table", "cli", '--json={"name":"test7"}'],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        query_rows = [
-            json.loads(line) for line in query_out.getvalue().strip().splitlines()
-        ]
-        assert [row["name"] for row in query_rows] == ["test7"]
-
-        query_out = io.StringIO()
-        with MockArgv(
-            ["query", dbpath, "--table", "cli", "--format", "count", "key2=jsonl"],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        assert query_out.getvalue().strip() == "3"
-
-        query_out = io.StringIO()
-        with MockArgv(
-            ["query", dbpath, "--table", "cli", "--format", "json", "name=test7"],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        query_rows = json.loads(query_out.getvalue().strip())
-        assert [row["name"] for row in query_rows] == ["test7"]
-
-        query_out = io.StringIO()
-        with MockArgv(
-            [
-                "query",
-                dbpath,
-                "--table",
-                "cli",
-                "--format",
-                "json",
-                "key2=jsonl",
-                "--limit",
-                "2",
-            ],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        query_json = query_out.getvalue()
-        assert query_json.startswith("[\n")
-        assert query_json.endswith("\n]\n")
-        assert not query_json.startswith("[\n,")
-        assert ",\n" in query_json
-        query_rows = json.loads(query_json)
-        assert len(query_rows) == 2
-
-        query_out = io.StringIO()
-        with MockArgv(
-            [
-                "query",
-                dbpath,
-                "--table",
-                "cli",
-                "--format",
-                "json",
-                "name=does-not-exist",
-            ],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        assert query_out.getvalue() == "[\n\n]\n"
-        assert json.loads(query_out.getvalue()) == []
-
-        # "line-like" JSON encoder should be compact (no spaces around separators)
-        query_out = io.StringIO()
-        with MockArgv(
-            ["query", dbpath, "--table", "cli", "name=test7"],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        assert '"meta":{"rank":7}' in query_out.getvalue()
-
-        # count and limited query row count should match
-        query_out = io.StringIO()
-        with MockArgv(
-            [
-                "query",
-                dbpath,
-                "--table",
-                "cli",
-                "--format",
-                "count",
-                "key2=jsonl",
-                "--limit",
-                "2",
-            ],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        assert query_out.getvalue().strip() == "2"
-
-        query_out = io.StringIO()
-        with MockArgv(
-            ["query", dbpath, "--table", "cli", "key2=jsonl", "--limit", "2"],
-            shift=1,
-        ):
-            with contextlib.redirect_stdout(query_out):
-                cli()
-        assert len(query_out.getvalue().strip().splitlines()) == 2
-
-        with MockArgv(["query", "-h"], shift=1):
-            with pytest.raises(SystemExit) as exc, contextlib.redirect_stdout(
-                io.StringIO()
-            ) as help_out:
-                cli()
-        assert exc.value.code == 0
-        help_text = help_out.getvalue()
-        assert "Examples:" in help_text
-        assert "jsonlitedb query my.db name=George" in help_text
-        assert '--json=\'{"active": true, "rank": 7}\'' in help_text
-        assert "--orderby=last --orderby=-born" in help_text
-        assert (
-            "supports simple equality filters and path-based sorting only" in help_text
-        )
-
-        with MockArgv(["query", dbpath, "--table", "cli", "badfilter"], shift=1):
-            with pytest.raises(ValueError):
-                cli()
-
-    finally:
-        for item in Path(".").glob("!!!*"):
-            item.unlink()
-
-
-if __name__ == "__main__":  # pragma: no cover
-    import tempfile
-
-    test_JSONLiteDB_general()
-    test_JSONLiteDB_file()
-    test_JSONLiteDB_dbconnection()
-    test_JSONLiteDB_adv()
-    test_JSONLiteDB_unicode()
-    test_JSONLiteDB_updates()
-    test_JSONLiteDB_update_many()
-    test_JSONLiteDB_query_results()
-    test_JSONLiteDB_patch()
-    test_JSONLiteDB_stats()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        test_JSONLiteDB_import_export_jsonl(Path(tmpdir))
-    test_Query()
-    test_query_args()
-    test_build_index_paths()
-    test_query2sql()
-    test_query_placeholder_token_in_path()
-    test_disable_regex()
-    test_init_handles_missing_metadata_table()
-    test_init_reraises_unexpected_operational_error()
-    test_build_orderby_pairs()
-    test_split_query()
-    test_Row()
-    test_listify()
-    test_group_ints_with_preceding_string()
-    test_sqlite_quote()
-    test_parse_cli_filter_value()
-    test_split_no_double_quotes()
-    test_non_dicts()
-    test_cli_insert_defaults_to_stdin()
-    test_cli_query_format_edges()
-    test_cli()
-
-    print("!" * 50)
-    print("All tests pass")
-    print("!" * 50)

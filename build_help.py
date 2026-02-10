@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 import nbformat
+from jupyter_client.kernelspec import NoSuchKernel
 from nbconvert import MarkdownExporter
 from nbconvert.preprocessors import ExecutePreprocessor
 
@@ -17,14 +18,26 @@ md = ["<!--- Auto Generated -->", "<!--- DO NOT MODIFY. WILL NOT BE SAVED -->"]
 os.chdir(os.path.dirname(__file__))
 
 
+def notebook_kernel_name(nb):
+    kernelspec = nb.metadata.get("kernelspec", {})
+    if kernelspec.get("name"):
+        return kernelspec["name"]
+    return "python"
+
+
 def run_replace_convert(file):
     # Load the Jupyter notebook
     with open(file, "r") as fp:
         nb = nbformat.read(fp, as_version=4)
 
     # Execute
-    executer = ExecutePreprocessor(timeout=600, kernel_name="python")
-    executer.preprocess(nb, {"metadata": {"path": "./"}})
+    kernel_name = notebook_kernel_name(nb)
+    executer = ExecutePreprocessor(timeout=600, kernel_name=kernel_name)
+    try:
+        executer.preprocess(nb, {"metadata": {"path": "./"}})
+    except NoSuchKernel:
+        executer = ExecutePreprocessor(timeout=600, kernel_name="python")
+        executer.preprocess(nb, {"metadata": {"path": "./"}})
 
     # clean
     nb.metadata.get("language_info", {}).pop("version", None)
