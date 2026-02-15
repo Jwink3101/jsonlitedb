@@ -73,6 +73,107 @@ def test_cli_insert_defaults_to_stdin():
         Path(dbpath).unlink(missing_ok=True)
 
 
+def test_cli_import_and_add_wrappers():
+    dbpath = "!!!TMP!!!import_add.db"
+    infile = "!!!TMP!!!import_add.jsonl"
+    Path(dbpath).unlink(missing_ok=True)
+    Path(infile).unlink(missing_ok=True)
+
+    try:
+        Path(infile).write_text('{"name":"from_file","ii":1}\n')
+        stdin = io.StringIO('{"name":"from_stdin","ii":2}\n')
+
+        with MockArgv(
+            ["import", dbpath, "--table", "cli", infile, "-"],
+            stdin=stdin,
+            shift=1,
+        ):
+            with contextlib.redirect_stderr(io.StringIO()) as err_out:
+                cli()
+        assert "positional insert inputs are deprecated" not in err_out.getvalue()
+
+        db = JSONLiteDB(dbpath, table="cli")
+        try:
+            assert db.query_one(name="from_file")["ii"] == 1
+            assert db.query_one(name="from_stdin")["ii"] == 2
+        finally:
+            db.close()
+
+        with MockArgv(
+            [
+                "add",
+                dbpath,
+                "--table",
+                "cli",
+                "--json",
+                '{"name":"from_add_flag","ii":3}',
+                '{"name":"from_add_positional","ii":4}',
+            ],
+            shift=1,
+        ):
+            cli()
+
+        db = JSONLiteDB(dbpath, table="cli")
+        try:
+            assert db.query_one(name="from_add_flag")["ii"] == 3
+            assert db.query_one(name="from_add_positional")["ii"] == 4
+        finally:
+            db.close()
+    finally:
+        Path(dbpath).unlink(missing_ok=True)
+        Path(infile).unlink(missing_ok=True)
+
+
+def test_cli_insert_family_help_text():
+    with MockArgv(["insert", "-h"], shift=1):
+        with (
+            pytest.raises(SystemExit) as exc,
+            contextlib.redirect_stdout(io.StringIO()) as help_out,
+        ):
+            cli()
+    assert exc.value.code == 0
+    assert "Use `import` for the same behavior" in help_out.getvalue()
+
+    with MockArgv(["import", "-h"], shift=1):
+        with (
+            pytest.raises(SystemExit) as exc,
+            contextlib.redirect_stdout(io.StringIO()) as help_out,
+        ):
+            cli()
+    assert exc.value.code == 0
+    import_help = help_out.getvalue()
+    assert "equivalent to" in import_help
+    assert "`insert`" in import_help
+    assert "or '-' for stdin" in import_help
+
+    with MockArgv(["add", "-h"], shift=1):
+        with (
+            pytest.raises(SystemExit) as exc,
+            contextlib.redirect_stdout(io.StringIO()) as help_out,
+        ):
+            cli()
+    assert exc.value.code == 0
+    add_help = help_out.getvalue()
+    assert "shorthand for" in add_help
+    assert "`insert --json" in add_help
+    assert "Equivalent to repeating" in add_help
+
+
+def test_cli_top_level_help_shows_read_write_command_lists():
+    with MockArgv(["-h"], shift=1):
+        with (
+            pytest.raises(SystemExit) as exc,
+            contextlib.redirect_stdout(io.StringIO()) as help_out,
+        ):
+            cli()
+    assert exc.value.code == 0
+    help_text = help_out.getvalue()
+    assert "COMMAND (read-only):" in help_text
+    assert "query, count, dump, indexes, stats" in help_text
+    assert "COMMAND (write):" in help_text
+    assert "insert, import, add, delete, patch, create-index, drop-index" in help_text
+
+
 def test_cli_query_format_edges():
     dbpath = "!!!TMP!!!queryedges.db"
     Path(dbpath).unlink(missing_ok=True)
@@ -398,19 +499,19 @@ def test_cli():
             [
                 "insert",
                 dbpath,
+                file3,
                 "--table",
                 "cli",
                 "--duplicates",
                 "replace",
                 "--json",
                 '{"name":"ordercheck","src":"flag","ii":1}',
-                file3,
             ],
             shift=1,
         ):
             with contextlib.redirect_stderr(io.StringIO()) as err_out:
                 cli()
-        assert "positional insert inputs are deprecated" in err_out.getvalue()
+        assert "positional insert inputs are deprecated" not in err_out.getvalue()
         assert db.query_one(name="ordercheck")["src"] == "legacy"
 
         with open(file4, "wt") as fp:
@@ -481,7 +582,7 @@ def test_cli():
         assert unique_name not in db.indexes
 
         with MockArgv(
-            ["drop-index", dbpath, "--table", "cli", "key2", "meta,rank"], shift=1
+            ["drop-index", dbpath, "key2", "meta,rank", "--table", "cli"], shift=1
         ):
             cli()
         assert ['$."key2"', '$."meta"."rank"'] not in db.indexes.values()
@@ -490,11 +591,11 @@ def test_cli():
             with pytest.raises(ValueError, match="requires --name"):
                 cli()
 
-        with MockArgv(["drop-index", dbpath, "--table", "cli", ","], shift=1):
+        with MockArgv(["drop-index", dbpath, ",", "--table", "cli"], shift=1):
             with pytest.raises(ValueError, match="Invalid index path"):
                 cli()
 
-        with MockArgv(["create-index", dbpath, "--table", "cli", ","], shift=1):
+        with MockArgv(["create-index", dbpath, ",", "--table", "cli"], shift=1):
             with pytest.raises(ValueError, match="Invalid index path"):
                 cli()
 
@@ -505,7 +606,7 @@ def test_cli():
         assert query_out.getvalue() == "No indexes\n"
 
         query_out = io.StringIO()
-        with MockArgv(["count", dbpath, "--table", "cli", "key2=jsonl"], shift=1):
+        with MockArgv(["count", dbpath, "key2=jsonl", "--table", "cli"], shift=1):
             with contextlib.redirect_stdout(query_out):
                 cli()
         assert query_out.getvalue().strip() == "3"
@@ -520,10 +621,10 @@ def test_cli():
             [
                 "patch",
                 dbpath,
+                "name=test7",
                 "--table",
                 "cli",
                 '--patch={"patched":true,"role":null}',
-                "name=test7",
             ],
             shift=1,
         ):
@@ -533,7 +634,7 @@ def test_cli():
         assert "role" not in patched
 
         with MockArgv(
-            ["patch", dbpath, "--table", "cli", "--patch", "[1,2,3]", "name=test7"],
+            ["patch", dbpath, "name=test7", "--table", "cli", "--patch", "[1,2,3]"],
             shift=1,
         ):
             with pytest.raises(
@@ -559,10 +660,10 @@ def test_cli():
             [
                 "patch",
                 dbpath,
+                "$.meta.rank=7",
                 "--table",
                 "cli",
                 '--patch={"path_filter":true}',
-                "$.meta.rank=7",
             ],
             shift=1,
         ):
@@ -596,7 +697,7 @@ def test_cli():
         assert "Indexes:" in stats_text
 
         query_out = io.StringIO()
-        with MockArgv(["query", dbpath, "--table", "cli", "name=test7"], shift=1):
+        with MockArgv(["query", dbpath, "name=test7", "--table", "cli"], shift=1):
             with contextlib.redirect_stdout(query_out):
                 cli()
         query_rows = [
@@ -618,12 +719,12 @@ def test_cli():
             [
                 "query",
                 dbpath,
+                "key2 = jsonl",  # Spaces testing too
                 "--table",
                 "cli",
                 "--orderby=-ii",
                 "--limit",
                 "2",
-                "key2 = jsonl",  # Spaces testing too
             ],
             shift=1,
         ):
@@ -639,12 +740,12 @@ def test_cli():
             [
                 "query",
                 dbpath,
+                "key2=jsonl",
                 "--table",
                 "cli",
                 "--orderby=-meta,rank",
                 "--limit",
                 "2",
-                "key2=jsonl",
             ],
             shift=1,
         ):
@@ -657,7 +758,7 @@ def test_cli():
 
         query_out = io.StringIO()
         with MockArgv(
-            ["query", dbpath, "--table", "cli", "$.meta.rank=7"],
+            ["query", dbpath, "$.meta.rank=7", "--table", "cli"],
             shift=1,
         ):
             with contextlib.redirect_stdout(query_out):
@@ -681,7 +782,7 @@ def test_cli():
 
         query_out = io.StringIO()
         with MockArgv(
-            ["query", dbpath, "--table", "cli", "--format", "count", "key2=jsonl"],
+            ["query", dbpath, "key2=jsonl", "--table", "cli", "--format", "count"],
             shift=1,
         ):
             with contextlib.redirect_stdout(query_out):
@@ -690,7 +791,7 @@ def test_cli():
 
         query_out = io.StringIO()
         with MockArgv(
-            ["query", dbpath, "--table", "cli", "--format", "json", "name=test7"],
+            ["query", dbpath, "name=test7", "--table", "cli", "--format", "json"],
             shift=1,
         ):
             with contextlib.redirect_stdout(query_out):
@@ -703,11 +804,11 @@ def test_cli():
             [
                 "query",
                 dbpath,
+                "key2=jsonl",
                 "--table",
                 "cli",
                 "--format",
                 "json",
-                "key2=jsonl",
                 "--limit",
                 "2",
             ],
@@ -728,11 +829,11 @@ def test_cli():
             [
                 "query",
                 dbpath,
+                "name=does-not-exist",
                 "--table",
                 "cli",
                 "--format",
                 "json",
-                "name=does-not-exist",
             ],
             shift=1,
         ):
@@ -744,7 +845,7 @@ def test_cli():
         # "line-like" JSON encoder should be compact (no spaces around separators)
         query_out = io.StringIO()
         with MockArgv(
-            ["query", dbpath, "--table", "cli", "name=test7"],
+            ["query", dbpath, "name=test7", "--table", "cli"],
             shift=1,
         ):
             with contextlib.redirect_stdout(query_out):
@@ -757,11 +858,11 @@ def test_cli():
             [
                 "query",
                 dbpath,
+                "key2=jsonl",
                 "--table",
                 "cli",
                 "--format",
                 "count",
-                "key2=jsonl",
                 "--limit",
                 "2",
             ],
@@ -773,7 +874,7 @@ def test_cli():
 
         query_out = io.StringIO()
         with MockArgv(
-            ["query", dbpath, "--table", "cli", "key2=jsonl", "--limit", "2"],
+            ["query", dbpath, "key2=jsonl", "--table", "cli", "--limit", "2"],
             shift=1,
         ):
             with contextlib.redirect_stdout(query_out):
@@ -796,7 +897,7 @@ def test_cli():
             "supports simple equality filters and path-based sorting only" in help_text
         )
 
-        with MockArgv(["query", dbpath, "--table", "cli", "badfilter"], shift=1):
+        with MockArgv(["query", dbpath, "badfilter", "--table", "cli"], shift=1):
             with pytest.raises(ValueError):
                 cli()
 

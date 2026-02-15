@@ -18,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = [
     "AssignedQueryError",
@@ -259,38 +259,58 @@ class JSONLiteDB:
                 ins,
             )
 
-    def import_jsonl(self, path, duplicates=False):
+    def load_jsonl(self, source, duplicates=False):
         """
-        Import JSON/JSONL data from a file into the database.
+        Load JSON/JSONL data into the database.
 
         Parameters
         ----------
-        path : str | Path
-            Input file path. Files ending in ``.json`` are parsed as full JSON.
-            All other files are treated as JSON Lines (one JSON value per line).
+        source : str | Path | file-like
+            Input source. Supported forms:
+            - Path-like source (``str``/``Path``): files ending in ``.json`` are
+              parsed as full JSON; other files are treated as JSON Lines.
+            - File-like object: if ``.name`` ends in ``.json``, parse as JSON;
+              otherwise read as JSON Lines.
         duplicates : bool | str, optional
-            Duplicate handling for unique indexes: False, True/"replace", or "ignore".
+            Duplicate handling for unique indexes: False, True/"replace", or
+            "ignore".
+
+        Notes
+        -----
+        JSON Lines insertion uses ``_dump=False`` internally, so each line is
+        treated as pre-serialized JSON and inserted via ``JSON(?)`` in SQLite.
 
         Examples
         --------
-        >>> db.import_jsonl("data.jsonl")
-        >>> db.import_jsonl("data.json", duplicates="ignore")
+        >>> db.load_jsonl("data.jsonl")
+        >>> db.load_jsonl("data.json", duplicates="ignore")
         """
-        path = str(path)
-        if path.lower().endswith(".json"):
-            with open(path, "rt") as fp:
-                data = json.load(fp)
-            if isinstance(data, list):
-                self.insertmany(data, duplicates=duplicates)
-            else:
-                self.insert(data, duplicates=duplicates)
-            return
+        if hasattr(source, "read"):
+            close_after = False
+        else:
+            source = open(source, "rt")
+            close_after = True
 
-        with open(path, "rt") as fp:
-            lines = (line.strip() for line in fp)
-            lines = (line for line in lines if line not in "[]")
+        try:
+            name = str(getattr(source, "name", "") or "").lower()
+            if name.endswith(".json"):
+                data = json.load(source)
+                if isinstance(data, list):
+                    self.insertmany(data, duplicates=duplicates)
+                else:
+                    self.insert(data, duplicates=duplicates)
+                return
+
+            lines = (line.strip() for line in source)
+            # Handle pretty-printed line-oriented json or stream
+            lines = (line for line in lines if line and line not in "[]")
             lines = (line.rstrip(",") for line in lines)
             self.insertmany(lines, _dump=False, duplicates=duplicates)
+        finally:
+            if close_after:
+                source.close()
+
+    import_jsonl = load_jsonl
 
     def export_jsonl(self, path, mode="w"):
         """
@@ -1410,6 +1430,14 @@ class JSONLiteDB:
 
     @property
     def Query(self):
+        """
+        Return a fresh query builder instance.
+
+        Returns
+        -------
+        Query
+            New `Query` object for building expressions, equivalent to `db.Q`.
+        """
         return Query()
 
     Q = Query
@@ -1533,6 +1561,20 @@ class QueryResult:
         return self
 
     def next(self):
+        """
+        Return the next result item.
+
+        Returns
+        -------
+        DBDict | DBList | object
+            Decoded JSON object/list (with `rowid`) when `_load=True`,
+            otherwise a raw JSON string.
+
+        Raises
+        ------
+        StopIteration
+            If no more rows are available.
+        """
         row = next(self.res)
 
         if not self._load:
@@ -1552,6 +1594,15 @@ class QueryResult:
     __next__ = next
 
     def fetchone(self):
+        """
+        Return the next result item or ``None``.
+
+        Returns
+        -------
+        DBDict | DBList | object | None
+            Next decoded item (or raw JSON string when `_load=False`), or
+            ``None`` when exhausted.
+        """
         try:
             return next(self)
         except StopIteration:
@@ -1560,9 +1611,30 @@ class QueryResult:
     one = fetchone
 
     def fetchall(self):
+        """
+        Return all remaining result items.
+
+        Returns
+        -------
+        list
+            List of decoded items (or raw JSON strings when `_load=False`).
+        """
         return list(self)
 
     def fetchmany(self, size=None):
+        """
+        Return up to ``size`` result items.
+
+        Parameters
+        ----------
+        size : int, optional
+            Maximum number of rows to fetch. Defaults to cursor `arraysize`.
+
+        Returns
+        -------
+        list
+            List of decoded items (or raw JSON strings when `_load=False`).
+        """
         if not size:
             size = self.res.arraysize
         out = []
@@ -1582,14 +1654,26 @@ def regexp(pattern, string):
 
 
 class MissingValueError(ValueError):
+    """
+    Raised when a query expression is missing a required comparison value.
+    """
+
     pass
 
 
 class DissallowedError(ValueError):
+    """
+    Raised when a disallowed mutation is attempted on a `Query` object.
+    """
+
     pass
 
 
 class MissingRowIDError(ValueError):
+    """
+    Raised when an update operation lacks a required rowid.
+    """
+
     pass
 
 
@@ -1793,6 +1877,10 @@ def _query_tuple2jsonpath(*args, **kwargs):
 
 
 class AssignedQueryError(ValueError):
+    """
+    Raised when a path-only context receives an already-assigned query.
+    """
+
     pass
 
 
@@ -1968,17 +2056,56 @@ class Row(sqlite3.Row):
     """
 
     def todict(self):
+        """
+        Return the row as a plain dictionary.
+
+        Returns
+        -------
+        dict
+            Mapping of column names to values.
+        """
         return {k: self[k] for k in self.keys()}
 
     def values(self):
+        """
+        Yield row values in column order.
+
+        Yields
+        ------
+        object
+            Column values from left to right.
+        """
         for k in self.keys():
             yield self[k]
 
     def items(self):
+        """
+        Yield ``(column, value)`` pairs.
+
+        Yields
+        ------
+        tuple[str, object]
+            Column name and corresponding value.
+        """
         for k in self.keys():
             yield k, self[k]
 
     def get(self, key, default=None):
+        """
+        Return the value for ``key`` if present, else ``default``.
+
+        Parameters
+        ----------
+        key : str
+            Column name to look up.
+        default : object, optional
+            Value returned when the key is not present.
+
+        Returns
+        -------
+        object
+            Column value or `default`.
+        """
         try:
             return self[key]
         except Exception:

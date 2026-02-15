@@ -805,6 +805,28 @@ def test_JSONLiteDB_import_export_jsonl(tmp_path):
     assert list(db4) == [{"a": 10}]
 
 
+def test_JSONLiteDB_load_jsonl_file_objects_and_paths(tmp_path):
+    items = [{"a": 1}, {"a": 2}, {"a": 3}]
+
+    jsonl_path = tmp_path / "data.jsonl"
+    jsonl_path.write_text("\n".join(json.dumps(item) for item in items) + "\n")
+    db = JSONLiteDB(":memory:")
+    with open(jsonl_path, "rt") as fp:
+        db.load_jsonl(fp)
+    assert list(db) == items
+
+    json_path = tmp_path / "data.json"
+    json_path.write_text(json.dumps(items))
+    db2 = JSONLiteDB(":memory:")
+    with open(json_path, "rt") as fp:
+        db2.load_jsonl(fp)
+    assert list(db2) == items
+
+    db3 = JSONLiteDB(":memory:")
+    with pytest.raises(Exception):
+        db3.load_jsonl(123)
+
+
 def test_Query():
     import pytest
 

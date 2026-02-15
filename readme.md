@@ -522,11 +522,18 @@ You can mix and match index or attribute for keys. The following are all **ident
 
 JSONLiteDB also installs a tool called "jsonlitedb" that makes it easy to read JSONL and JSON files into a database. This is useful for converting existing databases or appending data. The same workflow is available in the API via `db.import_jsonl(...)` and `db.export_jsonl(...)`.
 
+`insert` and `import` are the same command behavior for file/stdin input.
+`insert` keeps legacy positional file support for compatibility; `import` is
+the preferred form for positional file input. `add` is shorthand for `insert --json` and treats
+its positional `JSON_ITEM` arguments as `--json JSON_ITEM`.
+
 For CLI usage only, you can set `JSONLITEDB_CLI_TABLE` to change the default table name.  
 Passing `--table` on a command overrides the environment variable.
 
     $ jsonlitedb insert mydb.db newfile.jsonl  
+    $ jsonlitedb import mydb.db newfile.jsonl  
     $ cat newdata.jsonl | jsonlitedb insert mydb.db  
+    $ jsonlitedb add mydb.db '{"name":"new item","ii":42}'
     
 It can also dump a database to JSONL.
 

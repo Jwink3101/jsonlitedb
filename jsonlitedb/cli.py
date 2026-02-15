@@ -16,16 +16,16 @@ CLI_TABLE_ENV = "JSONLITEDB_CLI_TABLE"
 
 class _AppendInsertInput(argparse.Action):
     """
-    Record `insert` input sources in the exact order they appear on argv.
+    Record insert-family input sources in the exact order they appear on argv.
 
-    The `insert` command can combine `--stdin`, `--file`, and `--json`.
+    Insert-family commands can combine `--stdin`, `--file`, and `--json`.
     This action appends `(source_kind, payload)` tuples so execution can follow
     command-line order deterministically.
 
     Notes
     -----
-    Positional insert inputs are deprecated and are appended after all flagged
-    inputs for backward compatibility.
+    `insert` positional file inputs are a legacy compatibility path and are
+    appended after all flagged inputs.
     """
 
     def __call__(self, parser, namespace, values, option_string=None):
@@ -48,6 +48,17 @@ def _json_dump_line(item):
 def parse_cli_filter_value(text):
     """
     Parse CLI filter text as JSON, falling back to raw string on parse failure.
+
+    Parameters
+    ----------
+    text : str
+        Raw filter value from command-line input.
+
+    Returns
+    -------
+    object
+        Parsed JSON value when `text` is valid JSON, otherwise the original
+        string.
     """
     try:
         return json.loads(text)
@@ -56,6 +67,21 @@ def parse_cli_filter_value(text):
 
 
 def _raise_cli_integrity_error(exc, *, command):
+    """
+    Convert SQLite integrity errors into user-facing CLI output and exit.
+
+    Parameters
+    ----------
+    exc : sqlite3.IntegrityError
+        Original SQLite exception.
+    command : str
+        CLI subcommand being executed (for context-specific hints).
+
+    Raises
+    ------
+    SystemExit
+        Always raises with exit code 1 after writing an error message.
+    """
     message = str(exc).strip()
     if "UNIQUE constraint failed" in message:
         lines = ["Error: UNIQUE constraint violation."]
@@ -73,7 +99,13 @@ def _raise_cli_integrity_error(exc, *, command):
 
 
 def cli():
-    """Entry point for the JSONLiteDB command-line interface."""
+    """
+    Run the JSONLiteDB command-line interface.
+
+    This function parses argv, executes the selected subcommand, writes
+    command output to stdout/stderr, and exits with status code semantics
+    suitable for shell scripting.
+    """
     default_table = os.environ.get(CLI_TABLE_ENV) or "items"
     desc = dedent(
         f"""
@@ -81,13 +113,17 @@ def cli():
 
         Input is treated as JSON Lines (one JSON value per line). Files ending in
         .json are parsed as full JSON; .jsonl and .ndjson files are read line-by-line.
+        `insert` and `import` are equivalent for file/stdin ingestion.
+        `add` is shorthand for `insert --json`.
 
         Default table comes from ${CLI_TABLE_ENV} (fallback: 'items').
         Use --table to override for any command.
         """
     )
 
-    parser = argparse.ArgumentParser(description=desc)
+    parser = argparse.ArgumentParser(
+        description=desc, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
 
     global_parent = argparse.ArgumentParser(add_help=False)
     global_parent.add_argument(
@@ -111,108 +147,152 @@ def cli():
         title="Commands",
         required=True,
         metavar="COMMAND",
-        description="Run `%(prog)s <command> -h` for help",
+        description=dedent(
+            """
+            Read-only commands: query, count, dump, indexes, stats
+            Write commands: insert, import, add, delete, patch, create-index, drop-index
+
+            These commands offer many options but use the Python JSONLiteDB module or
+            direct sqlite3 for full manipulation.
+
+            Run `%(prog)s <command> -h` for help.
+            """
+        ),
     )
 
-    load = subparser.add_parser(
+    def _add_insert_family_parser(command, *, help_text, description, positional_mode):
+        cmd_parser = subparser.add_parser(
+            command,
+            parents=[global_parent],
+            help=help_text,
+            description=description,
+        )
+
+        cmd_parser.add_argument(
+            "--duplicates",
+            choices={"replace", "ignore"},
+            default=False,
+            help=(
+                'How to handle "UNIQUE" constraint conflicts. If omitted, conflicts '
+                "raise an error."
+            ),
+        )
+
+        cmd_parser.add_argument("dbpath", help="JSONLiteDB file")
+
+        if positional_mode == "legacy_files":
+            group_desc = dedent(
+                """
+                Input sources are processed in command-line order for flagged inputs.
+                Legacy positional file inputs are processed after all flagged inputs.
+                """
+            )
+        elif positional_mode == "json_items":
+            group_desc = dedent(
+                """
+                Input sources are processed in command-line order for flagged inputs.
+                Positional JSON_ITEM values are equivalent to repeating --json JSON_ITEM
+                and are processed after all flagged inputs.
+                """
+            )
+        else:
+            group_desc = dedent(
+                """
+                Input sources are processed in command-line order for flagged inputs.
+                Positional file inputs are processed after all flagged inputs.
+                """
+            )
+
+        input_group = cmd_parser.add_argument_group("Input sources", group_desc)
+        input_group.add_argument(
+            "--stdin",
+            nargs=0,
+            action=_AppendInsertInput,
+            dest="inputs",
+            help="Read JSON or JSONL from stdin. See --stdin-format",
+        )
+        input_group.add_argument(
+            "--file",
+            action=_AppendInsertInput,
+            dest="inputs",
+            metavar="PATH",
+            help="""
+                JSON/JSONL file input. Files ending in '.jsonl' or '.ndjson'
+                are read line-by-line.
+                Files ending in '.json' are loaded as a full JSON value (single
+                item or array of items).
+            """,
+        )
+        input_group.add_argument(
+            "--json",
+            action=_AppendInsertInput,
+            dest="inputs",
+            metavar="ITEM",
+            help="""Single JSON item to add. Example: --json '{"first":"Jim","last":"Kim"}'""",
+        )
+        input_group.add_argument(
+            "--stdin-format",
+            choices=("json", "jsonlines"),
+            default="jsonlines",
+            help="Format to expect for --stdin. Default: '%(default)s'",
+        )
+
+        if positional_mode == "json_items":
+            cmd_parser.add_argument(
+                "json_inputs",
+                nargs="*",
+                metavar="JSON_ITEM",
+                help=(
+                    "Positional JSON item(s). Equivalent to repeating --json "
+                    "JSON_ITEM."
+                ),
+            )
+        else:
+            cmd_parser.add_argument(
+                "legacy_inputs",
+                nargs="*",
+                metavar="FILE_OR_DASH",
+                help=(
+                    """
+                    Legacy positional input(s) for backward compatibility.
+                    Prefer `import` or --file/--stdin. Positional inputs are processed
+                    after all flagged inputs.
+                    """
+                    if positional_mode == "legacy_files"
+                    else """
+                    Positional input file(s), or '-' for stdin. Positional inputs are
+                    processed after all flagged inputs.
+                    """
+                ),
+            )
+
+    _add_insert_family_parser(
         "insert",
-        parents=[global_parent],
-        help="insert JSON into a JSONLiteDB database",
-    )
-
-    load.add_argument(
-        "--duplicates",
-        choices={"replace", "ignore"},
-        default=False,
-        help=(
-            'How to handle "UNIQUE" constraint conflicts. If omitted, conflicts '
-            "raise an error."
+        help_text="insert JSON into a JSONLiteDB database",
+        description=(
+            "Insert JSON/JSONL data into a database. "
+            "Use `import` for the same behavior with preferred positional file input."
         ),
+        positional_mode="legacy_files",
     )
-
-    load.add_argument("dbpath", help="JSONLiteDB file")
-    input_group = load.add_argument_group(
-        "Input sources",
-        dedent(
-            """
-            Input sources are processed in command-line order for flagged inputs.
-            Deprecated positional inputs are processed after all flagged inputs.
-            """
+    _add_insert_family_parser(
+        "import",
+        help_text="same as insert (w/o deprecated positional input)",
+        description=(
+            "Import JSON/JSONL data into a database. "
+            "This command is equivalent to `insert`, and is the preferred command "
+            "for positional file inputs."
         ),
+        positional_mode="files",
     )
-    input_group.add_argument(
-        "--stdin",
-        nargs=0,
-        action=_AppendInsertInput,
-        dest="inputs",
-        help="Read JSON or JSONL from stdin. See --stdin-format",
-    )
-    input_group.add_argument(
-        "--file",
-        action=_AppendInsertInput,
-        dest="inputs",
-        metavar="PATH",
-        help="""
-            JSON/JSONL file input. Files ending in '.jsonl' or '.ndjson'
-            are read line-by-line.
-            Files ending in '.json' are loaded as a full JSON value (single
-            item or array of items).
-        """,
-    )
-    input_group.add_argument(
-        "--json",
-        action=_AppendInsertInput,
-        dest="inputs",
-        metavar="ITEM",
-        help="""Single JSON item to add. Example: --json '{"first":"Jim","last":"Kim"}'""",
-    )
-    input_group.add_argument(
-        "--stdin-format",
-        choices=("json", "jsonlines"),
-        default="jsonlines",
-        help="Format to expect for --stdin. Default: '%(default)s'",
-    )
-    load.add_argument(
-        "legacy_inputs",
-        nargs="*",
-        metavar="FILE_OR_DASH",
-        help="""
-            Deprecated positional input(s) from older CLI usage. Use --file/--stdin
-            instead. Positional inputs are processed after all flagged inputs.
-        """,
-    )
-
-    dump = subparser.add_parser(
-        "dump",
-        help="dump database to JSONL",
-        parents=[global_parent],
-        description="Dump a JSONLiteDB table to JSONL or full SQL.",
-    )
-
-    dump.add_argument("dbpath", help="JSONLiteDB file")
-
-    dump.add_argument(
-        "--output",
-        default="-",
-        help="""
-            Output file path. Use '-' (default) to write to stdout.
-        """,
-    )
-    dump.add_argument(
-        "--file-mode",
-        choices=("a", "w"),
-        default="w",
-        dest="mode",
-        help="File mode for --output",
-    )
-
-    dump.add_argument(
-        "--sql",
-        action="store_true",
-        help="""
-            Emit a full SQL dump including tables and indexes (like `.dump` in
-            the sqlite3 shell).
-        """,
+    _add_insert_family_parser(
+        "add",
+        help_text="shorthand for insert --json (i.e., positional input mode)",
+        description=(
+            "Add JSON item(s) to a database. "
+            "Positional JSON_ITEM values are shorthand for `insert --json JSON_ITEM`."
+        ),
+        positional_mode="json_items",
     )
 
     query_desc = dedent(
@@ -287,6 +367,78 @@ def cli():
             "paths (e.g., --orderby name --orderby=-age --orderby=-parent,child)."
         ),
     )
+
+    count = subparser.add_parser(
+        "count",
+        help="count matching rows",
+        parents=[global_parent],
+        description="Count rows matching equality filters.",
+    )
+    count.add_argument("dbpath", help="JSONLiteDB file")
+    count.add_argument(
+        "filters",
+        nargs="*",
+        help="Filters in key=value form (values parsed as JSON when possible)",
+    )
+    count.add_argument(
+        "--json",
+        action="append",
+        default=None,
+        metavar="OBJECT",
+        help=(
+            "JSON object equality filter; repeatable. Each object is expanded "
+            "into ANDed key=value filters."
+        ),
+    )
+
+    dump = subparser.add_parser(
+        "dump",
+        help="dump database to JSONL",
+        parents=[global_parent],
+        description="Dump a JSONLiteDB table to JSONL or full SQL.",
+    )
+
+    dump.add_argument("dbpath", help="JSONLiteDB file")
+
+    dump.add_argument(
+        "--output",
+        default="-",
+        help="""
+            Output file path. Use '-' (default) to write to stdout.
+        """,
+    )
+    dump.add_argument(
+        "--file-mode",
+        choices=("a", "w"),
+        default="w",
+        dest="mode",
+        help="File mode for --output",
+    )
+
+    dump.add_argument(
+        "--sql",
+        action="store_true",
+        help="""
+            Emit a full SQL dump including tables and indexes (like `.dump` in
+            the sqlite3 shell).
+        """,
+    )
+
+    indexes = subparser.add_parser(
+        "indexes",
+        help="list indexes",
+        parents=[global_parent],
+        description="List indexes for the selected table.",
+    )
+    indexes.add_argument("dbpath", help="JSONLiteDB file")
+
+    stats = subparser.add_parser(
+        "stats",
+        help="show database stats",
+        parents=[global_parent],
+        description="Show human-readable row/index/storage stats for a table.",
+    )
+    stats.add_argument("dbpath", help="JSONLiteDB file")
 
     delete_desc = dedent(
         """
@@ -376,14 +528,6 @@ def cli():
         help="Target the UNIQUE index variant for path-based drops.",
     )
 
-    indexes = subparser.add_parser(
-        "indexes",
-        help="list indexes",
-        parents=[global_parent],
-        description="List indexes for the selected table.",
-    )
-    indexes.add_argument("dbpath", help="JSONLiteDB file")
-
     patch = subparser.add_parser(
         "patch",
         help="apply JSON Merge Patch to matching rows",
@@ -422,40 +566,25 @@ def cli():
         ),
     )
 
-    count = subparser.add_parser(
-        "count",
-        help="count matching rows",
-        parents=[global_parent],
-        description="Count rows matching equality filters.",
-    )
-    count.add_argument("dbpath", help="JSONLiteDB file")
-    count.add_argument(
-        "filters",
-        nargs="*",
-        help="Filters in key=value form (values parsed as JSON when possible)",
-    )
-    count.add_argument(
-        "--json",
-        action="append",
-        default=None,
-        metavar="OBJECT",
-        help=(
-            "JSON object equality filter; repeatable. Each object is expanded "
-            "into ANDed key=value filters."
-        ),
-    )
+    if len(sys.argv) == 2 and sys.argv[1] in {"-h", "--help"}:
+        parser.print_help()
+        sys.stdout.write(
+            dedent(
+                """
 
-    stats = subparser.add_parser(
-        "stats",
-        help="show database stats",
-        parents=[global_parent],
-        description="Show human-readable row/index/storage stats for a table.",
-    )
-    stats.add_argument("dbpath", help="JSONLiteDB file")
+                COMMAND (read-only):
+                  query, count, dump, indexes, stats
+
+                COMMAND (write):
+                  insert, import, add, delete, patch, create-index, drop-index
+                """
+            )
+        )
+        raise SystemExit(0)
 
     args = parser.parse_args()
 
-    create_if_missing_commands = {"insert", "create-index"}
+    create_if_missing_commands = {"insert", "import", "add", "create-index"}
     write_existing_commands = {"delete", "patch", "drop-index"}
     read_only_existing_commands = {"query", "count", "dump", "indexes", "stats"}
 
@@ -518,7 +647,7 @@ def cli():
 
         return eq_args, eq_kwargs
 
-    if args.command == "insert":
+    if args.command in {"insert", "import", "add"}:
 
         def _insert_parsed_json(value):
             try:
@@ -539,12 +668,12 @@ def cli():
                 _raise_cli_integrity_error(exc, command="insert")
 
         inputs = list(args.inputs or [])
-        if args.legacy_inputs:
-            sys.stderr.write(
-                "Deprecation warning: positional insert inputs are deprecated; "
-                "use --file/--stdin. Positional inputs are processed last.\n"
-            )
-            inputs.extend([("legacy", item) for item in args.legacy_inputs])
+        if args.command == "add":
+            inputs.extend([("json", item) for item in (args.json_inputs or [])])
+
+        legacy_inputs = list(getattr(args, "legacy_inputs", []) or [])
+        if legacy_inputs:
+            inputs.extend([("legacy", item) for item in legacy_inputs])
         if not inputs:
             inputs = [("stdin", None)]
 

@@ -2,6 +2,16 @@
 
 Newest on top
 
+## 0.3.1 (2026-02-15)
+
+- `load_jsonl` (aliased to `import_jsonl`) now also accepts a file object
+- Minor documentation & docstrings
+- CLI: 
+    - `import` is shorthand for `insert --file` and `add` is `insert --json`
+    - Divide the commands more clearly into write and read-only
+
+This is likely the 1.0 candidate but that may change.
+
 ## 0.3.0 (2026-02-09)
 
 - Refactor including putting CLI into its own
