@@ -582,7 +582,32 @@ def cli():
         )
         raise SystemExit(0)
 
-    args = parser.parse_args()
+    args, extras = parser.parse_known_args()
+    if extras:
+        if args.command in {"insert", "import"}:
+            legacy_inputs = list(getattr(args, "legacy_inputs", []) or [])
+            unknown = []
+            for item in extras:
+                if item.startswith("-") and item != "-":
+                    unknown.append(item)
+                else:
+                    legacy_inputs.append(item)
+            if unknown:
+                parser.error(f"unrecognized arguments: {' '.join(unknown)}")
+            args.legacy_inputs = legacy_inputs
+        elif args.command == "add":
+            json_inputs = list(getattr(args, "json_inputs", []) or [])
+            unknown = []
+            for item in extras:
+                if item.startswith("-") and item != "-":
+                    unknown.append(item)
+                else:
+                    json_inputs.append(item)
+            if unknown:
+                parser.error(f"unrecognized arguments: {' '.join(unknown)}")
+            args.json_inputs = json_inputs
+        else:
+            parser.error(f"unrecognized arguments: {' '.join(extras)}")
 
     create_if_missing_commands = {"insert", "import", "add", "create-index"}
     write_existing_commands = {"delete", "patch", "drop-index"}

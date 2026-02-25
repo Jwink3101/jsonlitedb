@@ -18,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 __all__ = [
     "AssignedQueryError",
@@ -1683,6 +1683,8 @@ class Query:
 
     Use attribute access or indexing to build paths, then compare to create
     SQL fragments. Query objects can be combined with `&`, `|`, and `~`.
+    Operator composition is non-mutating: these operators return a new `Query`
+    and do not modify their inputs.
     """
 
     def __init__(self):
@@ -1707,6 +1709,15 @@ class Query:
     def __call__(self):
         """Enable it to be called. Lessens mistakes when used as property of db"""
         return self
+
+    def _clone(self):
+        """Return a shallow copy of this query builder state."""
+        new = Query()
+        new._key = list(self._key) if isinstance(self._key, list) else self._key
+        new._qdict = dict(self._qdict)
+        new._query = self._query
+        new._asc_or_desc = self._asc_or_desc
+        return new
 
     ## Key Builders
     def __getattr__(self, attr):  # Query().key
@@ -1768,28 +1779,36 @@ class Query:
 
     ## Logic
     def _logic(self, other, *, comb):
+        """Combine two query expressions without mutating either operand."""
         if not self._query or not other._query:
             raise MissingValueError("Must set an (in)equality before logic")
 
-        self._qdict |= other._qdict
-        self._query = f"( {self._query} {comb} {other._query} )"
-        return self
+        new = self._clone()
+        new._qdict = self._qdict | other._qdict
+        new._query = f"( {self._query} {comb} {other._query} )"
+        return new
 
     __and__ = partialmethod(_logic, comb="AND")
     __or__ = partialmethod(_logic, comb="OR")
 
     def __invert__(self):
-        self._query = f"( NOT {self._query} )"
-        return self
+        """Return a negated query without mutating this query."""
+        new = self._clone()
+        new._query = f"( NOT {self._query} )"
+        return new
 
     # for ORDER BY
     def __neg__(self):
-        self._asc_or_desc = "DESC"
-        return self
+        """Return a DESC order query without mutating this query."""
+        new = self._clone()
+        new._asc_or_desc = "DESC"
+        return new
 
     def __pos__(self):
-        self._asc_or_desc = "ASC"
-        return self
+        """Return an ASC order query without mutating this query."""
+        new = self._clone()
+        new._asc_or_desc = "ASC"
+        return new
 
     def __str__(self):
         qdict = self._qdict

@@ -22,6 +22,7 @@ from jsonlitedb import (
     Q,
     Query,
     Row,
+    _raise_cli_integrity_error,
     cli,
     parse_cli_filter_value,
     sqlite_quote,
@@ -324,6 +325,28 @@ def test_cli_write_existing_unexpected_operational_error(monkeypatch):
 
     with MockArgv(["delete", "unused.db", "--allow-empty"], shift=1):
         with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+            cli()
+
+
+def test_raise_cli_integrity_error_non_unique_branch():
+    err = sqlite3.IntegrityError("some other integrity error")
+    with contextlib.redirect_stderr(io.StringIO()) as stderr_buf:
+        with pytest.raises(SystemExit):
+            _raise_cli_integrity_error(err, command="insert")
+    assert "Integrity error: some other integrity error" in stderr_buf.getvalue()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["import", "!!!TMP!!!argparse.db", "--table", "cli", "--bogus"],
+        ["add", "!!!TMP!!!argparse.db", "--table", "cli", "--bogus"],
+        ["query", "!!!TMP!!!argparse.db", "--table", "cli", "--bogus"],
+    ],
+)
+def test_cli_rejects_unknown_option_in_parse_known_extras(argv):
+    with MockArgv(argv, shift=1):
+        with pytest.raises(SystemExit):
             cli()
 
 

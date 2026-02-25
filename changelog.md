@@ -2,6 +2,15 @@
 
 Newest on top
 
+## 0.3.2 (2026-02-24)
+
+- Query composition operators are now non-mutating:
+    - `&`, `|`, and `~` return new `Query` objects instead of modifying operands
+    - unary `+` / `-` order modifiers also return new `Query` objects
+- Added regression tests and docstring notes for non-mutating operator behavior
+- Fixed CLI positional input handling for `insert` / `import` / `add` when trailing positional inputs are parsed as extras
+- Added CLI tests for the positional-extra parsing path and associated error branches
+
 ## 0.3.1 (2026-02-15)
 
 - `load_jsonl` (aliased to `import_jsonl`) now also accepts a file object

@@ -875,6 +875,47 @@ def test_Query():
         == '( JSON_EXTRACT(data, \'$."a"."b"\') < 10 )'
     )
 
+    q1 = Query().a > 1
+    q2 = Query().b < 2
+    q1_query, q1_qdict = q1._query, dict(q1._qdict)
+    q2_query, q2_qdict = q2._query, dict(q2._qdict)
+    q = q1 & q2
+    assert q is not q1 and q is not q2
+    assert q1._query == q1_query and q1._qdict == q1_qdict
+    assert q2._query == q2_query and q2._qdict == q2_qdict
+    assert (
+        core.translate(q._query, q._qdict)
+        == "( ( JSON_EXTRACT(data, '$.\"a\"') > 1 ) AND ( JSON_EXTRACT(data, '$.\"b\"') < 2 ) )"
+    )
+
+    q = q1 | q2
+    assert q is not q1 and q is not q2
+    assert q1._query == q1_query and q1._qdict == q1_qdict
+    assert q2._query == q2_query and q2._qdict == q2_qdict
+    assert (
+        core.translate(q._query, q._qdict)
+        == "( ( JSON_EXTRACT(data, '$.\"a\"') > 1 ) OR ( JSON_EXTRACT(data, '$.\"b\"') < 2 ) )"
+    )
+
+    q1 = Query().z == 9
+    q1_query, q1_qdict = q1._query, dict(q1._qdict)
+    q = ~q1
+    assert q is not q1
+    assert q1._query == q1_query and q1._qdict == q1_qdict
+    assert (
+        core.translate(q._query, q._qdict)
+        == "( NOT ( JSON_EXTRACT(data, '$.\"z\"') = 9 ) )"
+    )
+
+    q1 = Query().order.key
+    q1_key = list(q1._key)
+    q2 = -q1
+    q3 = +q1
+    assert q2 is not q1 and q3 is not q1
+    assert q1._key == q1_key and q1._asc_or_desc is None
+    assert q2._key == q1_key and q2._asc_or_desc == "DESC"
+    assert q3._key == q1_key and q3._asc_or_desc == "ASC"
+
     q = (Query().a < "A") | (Query().b < "B")
     assert (
         core.translate(q._query, q._qdict)
