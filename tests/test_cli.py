@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import contextlib
+import argparse
 import io
 import json
 import os
@@ -85,7 +86,7 @@ def test_cli_import_and_add_wrappers():
         stdin = io.StringIO('{"name":"from_stdin","ii":2}\n')
 
         with MockArgv(
-            ["import", dbpath, "--table", "cli", infile, "-"],
+            ["import", dbpath, "--table", "cli", "--file", infile, "--stdin"],
             stdin=stdin,
             shift=1,
         ):
@@ -123,6 +124,80 @@ def test_cli_import_and_add_wrappers():
     finally:
         Path(dbpath).unlink(missing_ok=True)
         Path(infile).unlink(missing_ok=True)
+
+
+def test_cli_import_extras_compat_path(monkeypatch):
+    dbpath = "!!!TMP!!!import_add_extras.db"
+    infile = "!!!TMP!!!import_add_extras.jsonl"
+    Path(dbpath).unlink(missing_ok=True)
+    Path(infile).unlink(missing_ok=True)
+
+    try:
+        Path(infile).write_text('{"name":"from_file_extras","ii":11}\n')
+        stdin = io.StringIO('{"name":"from_stdin_extras","ii":12}\n')
+
+        orig_parse_known_args = argparse.ArgumentParser.parse_known_args
+
+        def fake_parse_known_args(self, *args, **kwargs):
+            ns, extras = orig_parse_known_args(self, *args, **kwargs)
+            if getattr(ns, "command", None) == "import":
+                return ns, [infile, "-"]
+            return ns, extras
+
+        monkeypatch.setattr(
+            argparse.ArgumentParser,
+            "parse_known_args",
+            fake_parse_known_args,
+        )
+
+        with MockArgv(
+            ["import", dbpath, "--table", "cli"],
+            stdin=stdin,
+            shift=1,
+        ):
+            cli()
+
+        db = JSONLiteDB(dbpath, table="cli")
+        try:
+            assert db.query_one(name="from_file_extras")["ii"] == 11
+            assert db.query_one(name="from_stdin_extras")["ii"] == 12
+        finally:
+            db.close()
+    finally:
+        Path(dbpath).unlink(missing_ok=True)
+        Path(infile).unlink(missing_ok=True)
+
+
+def test_cli_add_extras_compat_path(monkeypatch):
+    dbpath = "!!!TMP!!!add_extras.db"
+    Path(dbpath).unlink(missing_ok=True)
+
+    try:
+        payload = '{"name":"from_add_extras","ii":21}'
+        orig_parse_known_args = argparse.ArgumentParser.parse_known_args
+
+        def fake_parse_known_args(self, *args, **kwargs):
+            ns, extras = orig_parse_known_args(self, *args, **kwargs)
+            if getattr(ns, "command", None) == "add":
+                return ns, [payload]
+            return ns, extras
+
+        monkeypatch.setattr(
+            argparse.ArgumentParser,
+            "parse_known_args",
+            fake_parse_known_args,
+        )
+
+        with MockArgv(["add", dbpath, "--table", "cli"], shift=1):
+            cli()
+
+        db = JSONLiteDB(dbpath, table="cli")
+        try:
+            assert db.query_one(name="from_add_extras")["ii"] == 21
+        finally:
+            db.close()
+    finally:
+        Path(dbpath).unlink(missing_ok=True)
 
 
 def test_cli_insert_family_help_text():
@@ -348,6 +423,24 @@ def test_cli_rejects_unknown_option_in_parse_known_extras(argv):
     with MockArgv(argv, shift=1):
         with pytest.raises(SystemExit):
             cli()
+
+
+def test_cli_insert_with_file_json_flag(tmp_path):
+    dbpath = tmp_path / "insert_file_json.db"
+    infile = tmp_path / "insert_file_json.json"
+    infile.write_text('[{"name":"from_json_file","ii":101}]')
+
+    with MockArgv(
+        ["insert", str(dbpath), "--table", "cli", "--file", str(infile)],
+        shift=1,
+    ):
+        cli()
+
+    db = JSONLiteDB(dbpath, table="cli")
+    try:
+        assert db.query_one(name="from_json_file")["ii"] == 101
+    finally:
+        db.close()
 
 
 def test_cli():

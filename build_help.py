@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import nbformat
 from jupyter_client.kernelspec import NoSuchKernel
@@ -32,12 +33,18 @@ def run_replace_convert(file):
 
     # Execute
     kernel_name = notebook_kernel_name(nb)
-    executer = ExecutePreprocessor(timeout=600, kernel_name=kernel_name)
+
+    pwd0 = os.getcwd()
+
     try:
+        os.chdir(Path(file).resolve().parent)
+        executer = ExecutePreprocessor(timeout=600, kernel_name=kernel_name)
         executer.preprocess(nb, {"metadata": {"path": "./"}})
     except NoSuchKernel:
         executer = ExecutePreprocessor(timeout=600, kernel_name="python")
         executer.preprocess(nb, {"metadata": {"path": "./"}})
+    finally:
+        os.chdir(pwd0)
 
     # clean
     nb.metadata.get("language_info", {}).pop("version", None)

@@ -18,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.3.2"
+__version__ = "0.4.0"
 
 __all__ = [
     "AssignedQueryError",
@@ -390,6 +390,7 @@ class JSONLiteDB:
         >>> db.query(db.Q.key.subkey == val)
         >>> db.query(db.Q["key", "subkey"] == val)
         >>> db.query(db.Q.key.subkey[3] == val)
+        >>> db.query((db.Q.first == "Paul").or_(db.Q.first == "John"))
 
         Complex example:
         >>> db.query((db.Q["other key", 9] >= 4) & (Q().key < 3))
@@ -534,6 +535,11 @@ class JSONLiteDB:
         This differs from `db.query(db.Q.path != None)` because it matches
         paths that exist even if the stored value is `None`.
 
+        Deprecated
+        ----------
+        Prefer `db.query(db.Q.path.exists_())` for new code. This method is
+        kept for compatibility and does not currently emit warnings.
+
         Parameters
         ----------
         path : str | tuple | Query
@@ -553,6 +559,7 @@ class JSONLiteDB:
         >>> db = JSONLiteDB(":memory:")
         >>> db.insert({"first": "John", "details": {"birthdate": 1940}})
         >>> list(db.query_by_path_exists(("details", "birthdate")))
+        >>> list(db.query(db.Q.details.birthdate.exists_()))
         """
 
         path = split_query(path)
@@ -593,6 +600,11 @@ class JSONLiteDB:
         """
         Count documents where a JSON path exists.
 
+        Deprecated
+        ----------
+        Prefer `db.count(db.Q.path.exists_())` for new code. This method is
+        kept for compatibility and does not currently emit warnings.
+
         Parameters
         ----------
         path : str | tuple | Query
@@ -608,6 +620,8 @@ class JSONLiteDB:
         >>> db = JSONLiteDB(":memory:")
         >>> db.insert({"a": {"b": 1}})
         >>> db.count_by_path_exists(("a", "b"))
+        1
+        >>> db.count(db.Q.a.b.exists_())
         1
         """
         path = split_query(path)
@@ -1685,6 +1699,9 @@ class Query:
     SQL fragments. Query objects can be combined with `&`, `|`, and `~`.
     Operator composition is non-mutating: these operators return a new `Query`
     and do not modify their inputs.
+
+    For fluent composition, `and_()` and `or_()` are available as method
+    equivalents of `&` and `|`.
     """
 
     def __init__(self):
@@ -1766,6 +1783,35 @@ class Query:
         self._query = f"( JSON_EXTRACT(data, {sqlite_quote(k)}) {sym} {qv} )"
         return self
 
+    def exists_(self):
+        """
+        Match rows where the current JSON path exists.
+
+        This uses `JSON_TYPE` so it distinguishes missing paths from JSON
+        null values.
+        """
+        if self._query:
+            raise DissallowedError("Cannot apply existence test to built query")
+
+        r = _query_tuple2jsonpath({tuple(self._key): None})  # one item
+        k = list(r)[0]
+        self._query = f"( JSON_TYPE(data, {sqlite_quote(k)}) IS NOT NULL )"
+        return self
+
+    def missing_(self):
+        """
+        Match rows where the current JSON path is missing.
+
+        This uses `JSON_TYPE` so JSON null values are not treated as missing.
+        """
+        if self._query:
+            raise DissallowedError("Cannot apply missing test to built query")
+
+        r = _query_tuple2jsonpath({tuple(self._key): None})  # one item
+        k = list(r)[0]
+        self._query = f"( JSON_TYPE(data, {sqlite_quote(k)}) IS NULL )"
+        return self
+
     __lt__ = partialmethod(_compare, sym="<")
     __le__ = partialmethod(_compare, sym="<=")
     __eq__ = partialmethod(_compare, sym="=")
@@ -1788,14 +1834,16 @@ class Query:
         new._query = f"( {self._query} {comb} {other._query} )"
         return new
 
-    __and__ = partialmethod(_logic, comb="AND")
-    __or__ = partialmethod(_logic, comb="OR")
+    __and__ = and_ = partialmethod(_logic, comb="AND")
+    __or__ = or_ = partialmethod(_logic, comb="OR")
 
     def __invert__(self):
         """Return a negated query without mutating this query."""
         new = self._clone()
         new._query = f"( NOT {self._query} )"
         return new
+
+    not_ = __invert__
 
     # for ORDER BY
     def __neg__(self):

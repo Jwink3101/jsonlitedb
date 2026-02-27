@@ -12,12 +12,7 @@ JSONLiteDB leverages [SQLite3](https://sqlite.org/index.html) and [JSON1](https:
 
 JSONLiteDB provides an easy API with no need to load the entire database into memory, nor dump it when inserting! JSONLiteDB SQLite files are easily usable in other tools with no proprietary formats or encoding. JSONLiteDB is a great replacement for reading a JSON or JSONLines file. Entries can be modified in place. Queries can be indexed for *greatly* improved query speed and optionally to enforce uniqueness.
 
-Similar tools and inspiration:
-
-- [TinyDB](https://github.com/msiemens/tinydb). The API and process of TinyDB heavily inspired JSONLiteDB. But TinyDB reads the entire JSON DB into memory and needs to dump the entire database upon insertion. Hardly efficient or scalable and still queries at O(N).
-- [Dataset](https://github.com/pudo/dataset) is promising but creates new columns for every key and is very "heavy" with its dependencies. As far as I can tell, there is no native way to support multi-column and/or unique indexes. But still, a very promising tool!
-- [KenobiDB](https://github.com/patx/kenobi). Came out while JSONLiteDB was in development. Similar idea with different design decisions. Does not directly support advanced queries indexes which can *greatly* accelerate queries! (Please correct me if I am wrong. I new to this tool)
-- [DictTable](https://github.com/Jwink3101/dicttable) (also written by me) is nice but entirely in-memory and not always efficient for non-equality queries.
+JSONLiteDB is a nice wrapper and interface to SQLite but there is nothing otherwise proprietary and can be used directly with SQL. 
 
 ## Install
 
@@ -40,12 +35,16 @@ With some fake data.
 
 
 ```python
->>> import os
+>>> import init_demo_mode  # setup for the demo. IGNORE in practice
 >>> 
->>> os.environ["JSONLITEDB_DISABLE_META"] = "true"  # avoid churn
->>> 
+>>> import jsonlitedb
 >>> from jsonlitedb import JSONLiteDB
+>>> 
+>>> print(f"{jsonlitedb.__version__ = }")
 ```
+
+    jsonlitedb.__version__ = '0.4.0'
+
 
 
 ```python
@@ -229,11 +228,25 @@ Note that you need to be careful with parentheses as the operator precedance for
 
 
 
+Same as:
+
+
+```python
+>>> db.query((db.Q.first == "George").and_(db.Q.last == "Martin")).all()
+```
+
+
+
+
+    [{'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'}]
+
+
+
 Can do inequalities too
 
 
 ```python
->>> list(db.query(db.Q.born < 1930))
+>>> db.query(db.Q.born < 1930).all()
 ```
 
 
@@ -372,11 +385,6 @@ And an index can also be used to enforce uniqueness amongst one or more fields
 ```
 
 See *Advanced Usage* for more examples including nested queries
-
-
-```python
->>> 
-```
 <!--- END AUTO GENERATED -->
 
 ## Queries and Paths
@@ -547,6 +555,14 @@ It can also dump a database to JSONL.
 - There is no distinction made between an entry having a key with a value of `None` vs. not having the key. However, you can use `query_by_path_exists()` to query items that have a certain path. There is no way still to mix this with other queries testing existence other than with `None`.  
 - While it will accept non-dict items like strings, lists, and tuples as a single item, queries on these do not work reliably.
 
+## Similar tools and inspiration
+
+Many ideas were borrowed but they all have different tradeoffs. JSONLiteDB's API is somewhat close to TinyDB and the storage is close to KenobiDB. Dataset has the closest *vibe* but doesn't handle a mix of keys (and with an index, the speed is about the same). DictTable is entirely in memory and uses Python dicts (hash table) instead of B-Trees.
+
+- [TinyDB](https://github.com/msiemens/tinydb). The API and process of TinyDB heavily inspired JSONLiteDB. But TinyDB reads the entire JSON DB into memory and needs to dump the entire database upon insertion. Hardly efficient or scalable and still queries at O(N).
+- [Dataset](https://github.com/pudo/dataset) is promising but creates new columns for every key and is very "heavy" with its dependencies. As far as I can tell, there is no native way to support multi-column and/or unique indexes. But still, a very promising tool!
+- [KenobiDB](https://github.com/patx/kenobi). Came out while JSONLiteDB was in development. Similar idea with different design decisions. Does not directly support advanced queries indexes which can *greatly* accelerate queries! (Please correct me if I am wrong. I new to this tool)
+- [DictTable](https://github.com/Jwink3101/dicttable) (also written by me) is nice but entirely in-memory and not always efficient for non-equality queries.
 
 ## FAQs
 
@@ -578,11 +594,11 @@ Yes and no. You can use your own methods to encode the object you insert but sin
 
 *We do not reject the use of AI-, LLM-, or agent-driven development, including “vibe coding.” However, we believe it is important to provide appropriate disclosure, as outlined below. We also prefer human-verified code and place high value on the trust users place in this project.*
 
-Up until version 0.1.10, there was no use of coding agents and only minimal AI via a chat interface. After that, OpenAI Codex was used to make small changes or perform grunt work. It also helped identify and fix (minor) security gaps.
+Up until version 0.1.10, there was no use of coding agents and only minimal AI via a chat interface. After that, OpenAI Codex was used to make small changes or perform grunt work. It also helped identify and fix (minor) security gaps. 
 
 These changes were all done minimally and with close human review. There was no black-box "vibe-coding" and this largely remains a human-developed tool.
 
-Beginning in 0.3.0, something closer to "vibe-coding" was used to expand the CLI and refactor into files. It was still reviewed and the majority of the critical module remains primarily human-written.
+Beginning in 0.3.0, something closer to "vibe-coding" was used to expand the CLI surface and refactor into files. It was still reviewed and the majority of the critical module remains primarily human-written.
 
 ---
 <!-- From https://github.com/dwyl/repo-badges -->  

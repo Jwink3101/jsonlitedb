@@ -14,30 +14,6 @@ from .jsonlitedb import JSONLiteDB, __version__
 CLI_TABLE_ENV = "JSONLITEDB_CLI_TABLE"
 
 
-class _AppendInsertInput(argparse.Action):
-    """
-    Record insert-family input sources in the exact order they appear on argv.
-
-    Insert-family commands can combine `--stdin`, `--file`, and `--json`.
-    This action appends `(source_kind, payload)` tuples so execution can follow
-    command-line order deterministically.
-
-    Notes
-    -----
-    `insert` positional file inputs are a legacy compatibility path and are
-    appended after all flagged inputs.
-    """
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        inputs = getattr(namespace, self.dest, None)
-        if inputs is None:
-            inputs = []
-        kind = option_string.lstrip("-")
-        payload = None if values == [] else values
-        inputs.append((kind, payload))
-        setattr(namespace, self.dest, inputs)
-
-
 def _json_dump_line(item):
     """
     Encode an item as compact single-line JSON for CLI streaming output.
@@ -183,38 +159,35 @@ def cli():
         if positional_mode == "legacy_files":
             group_desc = dedent(
                 """
-                Input sources are processed in command-line order for flagged inputs.
-                Legacy positional file inputs are processed after all flagged inputs.
+                Input sources are processed in fixed order:
+                --json, --file, --stdin, then legacy positional file inputs.
                 """
             )
         elif positional_mode == "json_items":
             group_desc = dedent(
                 """
-                Input sources are processed in command-line order for flagged inputs.
-                Positional JSON_ITEM values are equivalent to repeating --json JSON_ITEM
-                and are processed after all flagged inputs.
+                Input sources are processed in fixed order:
+                --json, --file, --stdin, then positional JSON_ITEM values.
                 """
             )
         else:
             group_desc = dedent(
                 """
-                Input sources are processed in command-line order for flagged inputs.
-                Positional file inputs are processed after all flagged inputs.
+                Input sources are processed in fixed order:
+                --json, --file, --stdin, then positional file inputs.
                 """
             )
 
         input_group = cmd_parser.add_argument_group("Input sources", group_desc)
         input_group.add_argument(
             "--stdin",
-            nargs=0,
-            action=_AppendInsertInput,
-            dest="inputs",
+            action="store_true",
             help="Read JSON or JSONL from stdin. See --stdin-format",
         )
         input_group.add_argument(
             "--file",
-            action=_AppendInsertInput,
-            dest="inputs",
+            action="append",
+            default=[],
             metavar="PATH",
             help="""
                 JSON/JSONL file input. Files ending in '.jsonl' or '.ndjson'
@@ -225,8 +198,8 @@ def cli():
         )
         input_group.add_argument(
             "--json",
-            action=_AppendInsertInput,
-            dest="inputs",
+            action="append",
+            default=[],
             metavar="ITEM",
             help="""Single JSON item to add. Example: --json '{"first":"Jim","last":"Kim"}'""",
         )
@@ -692,39 +665,44 @@ def cli():
             except sqlite3.IntegrityError as exc:
                 _raise_cli_integrity_error(exc, command="insert")
 
-        inputs = list(args.inputs or [])
+        json_inputs = list(args.json or [])
+        file_inputs = list(args.file or [])
         if args.command == "add":
-            inputs.extend([("json", item) for item in (args.json_inputs or [])])
-
+            json_inputs.extend(args.json_inputs or [])
         legacy_inputs = list(getattr(args, "legacy_inputs", []) or [])
-        if legacy_inputs:
-            inputs.extend([("legacy", item) for item in legacy_inputs])
-        if not inputs:
-            inputs = [("stdin", None)]
+        read_stdin = bool(args.stdin)
+        if not (json_inputs or file_inputs or legacy_inputs or read_stdin):
+            read_stdin = True
 
-        read_stdin = False
-        for source, payload in inputs:
-            if source == "json":
-                _insert_parsed_json(json.loads(payload))
-                continue
+        for payload in json_inputs:
+            _insert_parsed_json(json.loads(payload))
 
-            if source == "stdin" or (source == "legacy" and payload == "-"):
-                if read_stdin:
-                    continue
-                read_stdin = True
-                if args.stdin_format == "json":
-                    _insert_parsed_json(json.load(sys.stdin))
-                else:
-                    _insert_jsonlines(sys.stdin)
-                continue
-
-            file = payload
+        for file in file_inputs:
             if file.lower().endswith(".json"):
                 with open(file, "rt") as fp:
                     _insert_parsed_json(json.load(fp))
             else:
                 with open(file, "rt") as fp:
                     _insert_jsonlines(fp)
+
+        stdin_from_legacy = False
+        for file in legacy_inputs:
+            if file == "-":
+                stdin_from_legacy = True
+                continue
+            if file.lower().endswith(".json"):
+                with open(file, "rt") as fp:
+                    _insert_parsed_json(json.load(fp))
+            else:
+                with open(file, "rt") as fp:
+                    _insert_jsonlines(fp)
+
+        if read_stdin or stdin_from_legacy:
+            if args.stdin_format == "json":
+                _insert_parsed_json(json.load(sys.stdin))
+            else:
+                _insert_jsonlines(sys.stdin)
+
     elif args.command == "dump":
         try:
             fp = (

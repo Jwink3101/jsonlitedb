@@ -2,6 +2,17 @@
 
 Newest on top
 
+## 0.4.0 (2026-2-27)
+
+- Add `Query.exists_()` and `Query.missing_()`. These remove the need for `JSONLiteDB.count_by_path_exists` and `JSONLiteDB.count_by_path_exists`. Those are now noted as deprecated in the docs but do not (yet) raise a warning. They may in the future.
+- Adds `or_` and `and_`. `(db.Q.a == 1) & (db.Q.b == 2) <==> (db.Q.a == 1).and_(db.Q.b == 2)`
+    - Also add `not_` though this breaks the fluent flow. `(~(db.Q.a == 1)) & (db.Q.b == 2) <==> (db.Q.a == 1).not_().and_(db.Q.b == 2)`
+    - Complex example:
+        - Operator form: `(((db.Q.a == 1) | (db.Q.b == 2)) & (~(db.Q.c == 3))) | ((db.Q.d >= 4) & (db.Q.e < 10))`
+        - Fluent form: `(db.Q.a == 1).or_(db.Q.b == 2).and_((db.Q.c == 3).not_()).or_((db.Q.d >= 4).and_(db.Q.e < 10))`
+        - SQL: `( ( ( ( JSON_EXTRACT(data, '$."a"') = 1 ) OR ( JSON_EXTRACT(data, '$."b"') = 2 ) ) AND ( NOT ( JSON_EXTRACT(data, '$."c"') = 3 ) ) ) OR ( ( JSON_EXTRACT(data, '$."d"') >= 4 ) AND ( JSON_EXTRACT(data, '$."e"') < 10 ) ) )`
+- CLI: Changed the order parsing to be determinstic for adding items. Greatly simplifies the code
+
 ## 0.3.2 (2026-02-24)
 
 - Query composition operators are now non-mutating:
@@ -19,7 +30,7 @@ Newest on top
     - `import` is shorthand for `insert --file` and `add` is `insert --json`
     - Divide the commands more clearly into write and read-only
 
-This is likely the 1.0 candidate but that may change.
+~~This is likely the 1.0 candidate but that may change.~~
 
 ## 0.3.0 (2026-02-09)
 

@@ -2,10 +2,10 @@
 
 ## Project Structure & Module Organization
 
-- `jsonlitedb.py` contains the core JSONLiteDB implementation and public API.
-- The project is a single-module layout (no package directory); the version comes from `jsonlitedb.__version__` via `pyproject.toml`.
-- Tests live in `test_jsonlitedb.py`; `test_benchmark.py` is a benchmark script, and `test.py` is a local smoke script.
-- `run_tests.sh` runs pytest coverage for `test_jsonlitedb.py` and writes HTML output to `htmlcov/`.
+- `jsonlitedb/jsonlitedb.py` contains the core JSONLiteDB implementation and public API.
+- The project uses a `jsonlitedb/` package directory; the version comes from `jsonlitedb.__version__` via `pyproject.toml`.
+- Tests live in `tests/test_jsonlitedb.py` and `tests/test_cli.py`; `test_benchmark.py` is a benchmark script.
+- `run_tests.sh` runs pytest coverage for the `tests/` directory and writes HTML output to `htmlcov/`.
 - Packaging metadata is in `pyproject.toml` (no `setup.py` in this repo).
 - Utility scripts include `build_help.py` and `copy_to_github.py`; notebooks live in `benchmarks.ipynb`.
 - Generated artifacts and local data (e.g., `htmlcov/`, `build/`, `*.db`) should not be committed unless explicitly requested.
@@ -13,10 +13,9 @@
 ## Build, Test, and Development Commands
 
 - `python -m pytest` runs the test suite.
-- `./run_tests.sh` runs pytest with coverage for `test_jsonlitedb.py` and generates HTML output in `htmlcov/`.
+- `./run_tests.sh` runs pytest with coverage for the `tests/` directory and generates HTML output in `htmlcov/`.
 - `python -m pip install -e .` installs the project in editable mode for local development.
 - `python -m jsonlitedb` runs the CLI, and the `jsonlitedb` console script is available after install.
-- `test.py` is path-sensitive (it asserts the module file location), so update it if the repo path changes.
 
 ## Development and Publishing Workflow
 
@@ -39,7 +38,7 @@
 ## Testing Guidelines
 
 - Tests use `pytest` with coverage reporting.
-- Name tests `test_*.py` and functions `test_*` (see `test_jsonlitedb.py`).
+- Name tests `test_*.py` and functions `test_*` (see `tests/test_jsonlitedb.py`).
 - Aim to keep coverage high; the README advertises 100% coverage.
 - When adding features, include both positive and failure-path tests (e.g., `pytest.raises`).
 

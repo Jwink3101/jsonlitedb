@@ -528,6 +528,14 @@ def test_JSONLiteDB_adv():
 
     assert db.count(db.Q.made.up.key != None) == 0
     assert db.count(db.Q.made.up.key == None) == 4
+    assert db.count(db.Q.extra2.exists_()) == 1
+    assert db.count(db.Q.extra2.missing_()) == 3
+    assert db.count(db.Q.made.up.key.exists_()) == 0
+    assert db.count(db.Q.made.up.key.missing_()) == 4
+
+    # Preferred/new API: use exists_()/missing_() predicates in query/count.
+    # query_by_path_exists()/count_by_path_exists() are compatibility helpers
+    # and are expected to be fully deprecated in a future release.
 
     # This will now work to detect extra2
     assert list(db.query_by_path_exists(db.Q.extra2)) == [
@@ -545,9 +553,13 @@ def test_JSONLiteDB_adv():
     assert [
         json.loads(r) for r in db.query_by_path_exists(db.Q.extra2, _load=False)
     ] == list(db.query_by_path_exists(db.Q.extra2))
+    assert list(db.query(db.Q.extra2.exists_())) == list(
+        db.query_by_path_exists(db.Q.extra2)
+    )
     assert db.count_by_path_exists(db.Q.extra2) == 1
 
     assert list(db.query_by_path_exists(db.Q.made.up.key)) == []
+    assert list(db.query(db.Q.made.up.key.exists_())) == []
     assert db.count_by_path_exists(db.Q.made.up.key) == 0
 
     # Nested. Look at second kid
@@ -571,10 +583,18 @@ def test_JSONLiteDB_adv():
             "phone": {"home": "505.555.3101"},
         },
     ]
+    assert list(db.query(db.Q.kids[1].exists_())) == list(
+        db.query_by_path_exists(db.Q.kids[1])
+    )
+    assert (
+        db.count(db.Q.kids[1].exists_()) == db.count_by_path_exists(db.Q.kids[1]) == 2
+    )
 
     # No path means empty
     assert list(db.query_by_path_exists(None)) == []
     assert db.count_by_path_exists(None) == 0
+    assert list(db.query(db.Q.missing_())) == list(db.query_by_path_exists(None))
+    assert db.count(db.Q.missing_()) == db.count_by_path_exists(None)
 
 
 def test_JSONLiteDB_unicode():
@@ -865,6 +885,21 @@ def test_Query():
         core.translate(q._query, q._qdict) == "( JSON_EXTRACT(data, '$.\"a\"') < 10 )"
     )
 
+    q = Query().a.exists_()
+    assert (
+        core.translate(q._query, q._qdict)
+        == "( JSON_TYPE(data, '$.\"a\"') IS NOT NULL )"
+    )
+
+    q = Query().a.missing_()
+    assert (
+        core.translate(q._query, q._qdict) == "( JSON_TYPE(data, '$.\"a\"') IS NULL )"
+    )
+    with pytest.raises(DissallowedError):
+        (Query().a == 1).exists_()
+    with pytest.raises(DissallowedError):
+        (Query().a == 1).missing_()
+
     q1 = Query().a["b"] < 10
     q2 = Query()["a", "b"] < 10
     q3 = Query()["a"].b < 10
@@ -897,6 +932,22 @@ def test_Query():
         == "( ( JSON_EXTRACT(data, '$.\"a\"') > 1 ) OR ( JSON_EXTRACT(data, '$.\"b\"') < 2 ) )"
     )
 
+    q = q1.and_(q2)
+    assert q is not q1 and q is not q2
+    assert q1._query == q1_query and q1._qdict == q1_qdict
+    assert q2._query == q2_query and q2._qdict == q2_qdict
+    assert core.translate(q._query, q._qdict) == core.translate(
+        (q1 & q2)._query, (q1 & q2)._qdict
+    )
+
+    q = q1.or_(q2)
+    assert q is not q1 and q is not q2
+    assert q1._query == q1_query and q1._qdict == q1_qdict
+    assert q2._query == q2_query and q2._qdict == q2_qdict
+    assert core.translate(q._query, q._qdict) == core.translate(
+        (q1 | q2)._query, (q1 | q2)._qdict
+    )
+
     q1 = Query().z == 9
     q1_query, q1_qdict = q1._query, dict(q1._qdict)
     q = ~q1
@@ -905,6 +956,12 @@ def test_Query():
     assert (
         core.translate(q._query, q._qdict)
         == "( NOT ( JSON_EXTRACT(data, '$.\"z\"') = 9 ) )"
+    )
+    q = q1.not_()
+    assert q is not q1
+    assert q1._query == q1_query and q1._qdict == q1_qdict
+    assert core.translate(q._query, q._qdict) == core.translate(
+        (~q1)._query, (~q1)._qdict
     )
 
     q1 = Query().order.key
