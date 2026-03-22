@@ -6,7 +6,7 @@ SQLite3-backed JSON document database with support for indices and advanced quer
 
 ![100% Coverage][100%]
 
-## Premise and Inspiration
+## Premise
 
 JSONLiteDB leverages [SQLite3](https://sqlite.org/index.html) and [JSON1](https://sqlite.org/json1.html) to create a fast JSON document store with easy persistence, indexing capability, and extensible use.
 
@@ -43,7 +43,7 @@ With some fake data.
 >>> print(f"{jsonlitedb.__version__ = }")
 ```
 
-    jsonlitedb.__version__ = '0.4.0'
+    jsonlitedb.__version__ = '0.4.1'
 
 
 
@@ -492,6 +492,11 @@ They can also handle logic. Note that you must be *very careful* about parenthes
 
     (db.Q.item < 10) & (db.Q.other_item > 'bla') # AND  
     (db.Q.item < 10) | (db.Q.other_item > 'bla') # OR  
+    
+or
+
+    (db.Q.item < 10).and_(db.Q.other_item > 'bla') # AND  
+    (db.Q.item < 10).or_(db.Q.other_item > 'bla')  # OR  
     
 Note that while something like `10 <= var <= 20` is valid Python, a query must be done like:
 

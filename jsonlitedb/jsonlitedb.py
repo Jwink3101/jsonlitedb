@@ -18,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 __all__ = [
     "AssignedQueryError",
@@ -112,10 +112,7 @@ class JSONLiteDB:
             self.sqlitekws = sqlitekws
             self.db = sqlite3.connect(self.dbpath, **sqlitekws)
 
-        self.db.row_factory = Row
-        self.db.set_trace_callback(sqldebug)
-        if not DISABLE_REGEX:
-            self.db.create_function("REGEXP", 2, regexp, deterministic=True)
+        self._configure_connection(self.db)
 
         self.table = "".join(c for c in table if c == "_" or c.isalnum())
         logger.debug(f"{self.table = }")
@@ -123,6 +120,12 @@ class JSONLiteDB:
         self.context_count = 0
 
         self._init(wal_mode=wal_mode)
+
+    def _configure_connection(self, db):
+        db.row_factory = Row
+        db.set_trace_callback(sqldebug)
+        if not DISABLE_REGEX:
+            db.create_function("REGEXP", 2, regexp, deterministic=True)
 
     @classmethod
     def connect(cls, *args, **kwargs):
@@ -165,6 +168,46 @@ class JSONLiteDB:
         """
         dbpath = f"file:{dbpath}?mode=ro"
         kwargs["uri"] = True
+        return cls(dbpath, **kwargs)
+
+    @classmethod
+    def create(cls, dbpath, **kwargs):
+        """
+        Create a new database and fail if the path already exists.
+
+        Parameters
+        ----------
+        dbpath : str | Path
+            SQLite database path to create.
+        **kwargs : dict
+            JSONLiteDB and sqlite3 keyword arguments.
+
+        Returns
+        -------
+        JSONLiteDB
+            Newly created database instance.
+
+        Raises
+        ------
+        FileExistsError
+            If ``dbpath`` already exists.
+        ValueError
+            If ``dbpath`` is ``':memory:'`` or ``uri=True`` is requested.
+        TypeError
+            If ``dbpath`` is an existing sqlite3 connection.
+        """
+        if isinstance(dbpath, Path):
+            dbpath = str(dbpath)
+
+        if isinstance(dbpath, sqlite3.Connection):
+            raise TypeError("JSONLiteDB.create() requires a filesystem path")
+        if dbpath == ":memory:":
+            raise ValueError("JSONLiteDB.create() requires a filesystem path")
+        if kwargs.get("uri"):
+            raise ValueError("JSONLiteDB.create() does not support uri=True")
+        if os.path.exists(dbpath):
+            raise FileExistsError(f"database already exists: {dbpath}")
+
         return cls(dbpath, **kwargs)
 
     @classmethod
@@ -1480,6 +1523,105 @@ class JSONLiteDB:
             db.close()
 
     __del__ = close
+
+    def backup(
+        self,
+        target,
+        *,
+        pages=-1,
+        progress=None,
+        name="main",
+        sleep=0.250,
+        reopen=False,
+    ):
+        """
+        Convenience wrapper around ``sqlite3.Connection.backup``.
+
+        Copy this database into another SQLite database using SQLite backup.
+
+        Parameters
+        ----------
+        target : str | Path | sqlite3.Connection | JSONLiteDB
+            Backup destination. If a path is provided, SQLite opens that file
+            as the target database for the duration of the backup.
+        pages : int, optional
+            Number of pages to copy per step. Defaults to ``-1`` for the entire
+            database in one call.
+        progress : callable | None, optional
+            Optional callback passed through to ``sqlite3.Connection.backup``.
+        name : str, optional
+            Source database name. Defaults to ``"main"``.
+        sleep : float, optional
+            Sleep interval between backup attempts. Defaults to ``0.25``.
+        reopen : bool, optional
+            If True, replace this object's connection with the backup target
+            after the copy completes.
+
+        Returns
+        -------
+        target
+            The provided target object or path.
+
+        Examples
+        --------
+        >>> db = JSONLiteDB.memory()
+        >>> db.insert({"first": "John"})
+        >>> db.backup("backup.db")
+        >>> db2 = JSONLiteDB("backup.db")
+        >>> len(db2)
+        1
+
+        >>> # This branches the database into memory. Changes now diverge
+        >>> # from the original file-backed database.
+        >>> db = JSONLiteDB("mydb.db")
+        >>> db.backup(":memory:", reopen=True)
+        JSONLiteDB(':memory:')
+
+
+        References
+        ----------
+        https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup
+        """
+        returned_target = target
+        close_after = False
+        path_target = None
+        if isinstance(target, JSONLiteDB):
+            target_db = target.db
+        elif isinstance(target, sqlite3.Connection):
+            target_db = target
+        else:
+            if isinstance(target, Path):
+                target = str(target)
+            path_target = target
+            target_db = sqlite3.connect(target)
+            close_after = True
+
+        try:
+            self.db.backup(
+                target_db,
+                pages=pages,
+                progress=progress,
+                name=name,
+                sleep=sleep,
+            )
+
+            if reopen:
+                old_db = self.db
+                self.db = target_db
+                if path_target is None:
+                    self.dbpath = "*existing connection*"
+                    self.sqlitekws = {}
+                else:
+                    self.dbpath = path_target
+                    self.sqlitekws = {}
+                self._configure_connection(self.db)
+                close_after = False
+                old_db.close()
+        finally:
+            if close_after:
+                target_db.close()
+
+        return returned_target
 
     def wal_checkpoint(self, mode=None):
         """

@@ -380,6 +380,41 @@ def test_JSONLiteDB_file():
         name.unlink()
 
 
+def test_JSONLiteDB_create():
+    name = Path("!!!TEST_NEW.db")
+    try:
+        db = JSONLiteDB.create(name, table="bla")
+        assert str(db) == "JSONLiteDB('!!!TEST_NEW.db', table='bla')"
+        db.insert({"key": "value"})
+        assert len(db) == 1
+        del db
+
+        with pytest.raises(
+            FileExistsError, match="database already exists: !!!TEST_NEW.db"
+        ):
+            JSONLiteDB.create(name, table="bla")
+    finally:
+        if name.exists():
+            name.unlink()
+
+
+def test_JSONLiteDB_create_invalid_args():
+    with pytest.raises(
+        ValueError, match=r"JSONLiteDB\.create\(\) requires a filesystem path"
+    ):
+        JSONLiteDB.create(":memory:")
+
+    with pytest.raises(
+        ValueError, match=r"JSONLiteDB\.create\(\) does not support uri=True"
+    ):
+        JSONLiteDB.create("file:test.db?mode=rwc", uri=True)
+
+    with pytest.raises(
+        TypeError, match=r"JSONLiteDB\.create\(\) requires a filesystem path"
+    ):
+        JSONLiteDB.create(sqlite3.connect(":memory:"))
+
+
 def test_JSONLiteDB_dbconnection():
     db0 = sqlite3.connect(":memory:")
     db1 = JSONLiteDB(db0)
@@ -400,9 +435,10 @@ def test_JSONLiteDB_dbconnection():
         "other": {"key": "other value"},
     }
 
-    # Test backup. Use the db1.db as db1 is JSONLiteDB
+    # Test backup to a raw sqlite3 connection.
     db2 = sqlite3.connect(":memory:")
-    db1.db.backup(db2)
+    returned = db1.backup(db2)
+    assert returned is db2
     db3 = JSONLiteDB(db2)
     assert db3.db is db2
     assert db2 is not db0
@@ -413,6 +449,73 @@ def test_JSONLiteDB_dbconnection():
     assert len(db1) == 1
     db4.insert({"this": "is", "a": ["new", "object"]})
     assert len(db1) == len(db4) == 2
+
+
+def test_JSONLiteDB_backup_to_file():
+    source = JSONLiteDB.memory()
+    source.insert({"first": "John"})
+    target = Path("!!!TEST_BACKUP.db")
+    try:
+        returned = source.backup(target)
+        assert returned == target
+
+        db = JSONLiteDB.read_only(target)
+        assert len(db) == 1
+        assert db.query_one(first="John") == {"first": "John"}
+    finally:
+        if target.exists():
+            target.unlink()
+
+
+def test_JSONLiteDB_backup_reopen_to_file():
+    source = JSONLiteDB.memory()
+    source.insert({"first": "John"})
+    target = Path("!!!TEST_BACKUP_RETARGET.db")
+    try:
+        returned = source.backup(target, reopen=True)
+        assert returned == target
+        assert source.dbpath == "!!!TEST_BACKUP_RETARGET.db"
+        assert source.query_one(first="John") == {"first": "John"}
+
+        source.insert({"first": "Paul"})
+        db = JSONLiteDB.read_only(target)
+        assert db.query(_orderby="first").all() == [
+            {"first": "John"},
+            {"first": "Paul"},
+        ]
+    finally:
+        source.close()
+        if target.exists():
+            target.unlink()
+
+
+def test_JSONLiteDB_backup_reopen_to_connection():
+    source = JSONLiteDB.memory()
+    source.insert({"first": "John"})
+    target = sqlite3.connect(":memory:")
+
+    returned = source.backup(target, reopen=True)
+    assert returned is target
+    assert source.db is target
+    assert source.dbpath == "*existing connection*"
+    assert source.query_one(first="John") == {"first": "John"}
+
+    source.insert({"first": "Paul"})
+    db = JSONLiteDB(target)
+    assert db.query(_orderby="first").all() == [
+        {"first": "John"},
+        {"first": "Paul"},
+    ]
+
+
+def test_JSONLiteDB_backup_to_JSONLiteDB():
+    source = JSONLiteDB.memory()
+    source.insert({"first": "John"})
+    target = JSONLiteDB.memory()
+
+    returned = source.backup(target)
+    assert returned is target
+    assert target.query_one(first="John") == {"first": "John"}
 
 
 def test_JSONLiteDB_adv():

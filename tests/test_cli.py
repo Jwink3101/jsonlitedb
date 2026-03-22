@@ -1,12 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-import contextlib
 import argparse
+import contextlib
 import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -28,6 +29,18 @@ from jsonlitedb import (
     parse_cli_filter_value,
     sqlite_quote,
 )
+
+
+def _cleanup_tmp_artifacts(*paths):
+    for path in paths:
+        path = Path(path)
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+            continue
+
+        path.unlink(missing_ok=True)
+        for suffix in ("-wal", "-shm"):
+            Path(f"{path}{suffix}").unlink(missing_ok=True)
 
 
 class MockArgv:
@@ -321,6 +334,17 @@ def test_cli_table_env_default_and_override(monkeypatch):
         Path(dbpath).unlink(missing_ok=True)
 
 
+def test_cleanup_tmp_artifacts_removes_directory():
+    base = Path("!!!TMP!!!cleanupdir")
+    nested = base / "nested.txt"
+    base.mkdir(exist_ok=True)
+    nested.write_text("tmp")
+
+    _cleanup_tmp_artifacts(base)
+
+    assert not base.exists()
+
+
 def test_cli_open_modes_missing_db():
     base = Path("!!!TMP!!!openmodes")
     base.mkdir(exist_ok=True)
@@ -454,7 +478,7 @@ def test_cli():
     dump = "!!!TMP!!!dump.jsonl"
     dump2 = "!!!TMP!!!dump.sql"
 
-    Path(dbpath).unlink(missing_ok=True)
+    _cleanup_tmp_artifacts(dbpath, file1, file2, file3, file4, dump, dump2)
 
     try:
         db = JSONLiteDB(dbpath, table="cli")
@@ -1041,5 +1065,4 @@ def test_cli():
         assert len(db) == 0
 
     finally:
-        for item in Path(".").glob("!!!*"):
-            item.unlink()
+        _cleanup_tmp_artifacts(dbpath, file1, file2, file3, file4, dump, dump2)

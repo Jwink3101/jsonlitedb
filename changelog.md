@@ -2,7 +2,12 @@
 
 Newest on top
 
-## 0.4.0 (2026-2-27)
+## 0.4.1 (2026-03-22)
+
+* Adds `JSONLiteDB.create()` to ensure there is no existing db there
+* Adds `JSONLiteDB.backup()` as a convenience wrapper around `sqlite3.Connection.backup` and allows for "branching" the db.
+
+## 0.4.0 (2026-02-27)
 
 - Add `Query.exists_()` and `Query.missing_()`. These remove the need for `JSONLiteDB.count_by_path_exists` and `JSONLiteDB.count_by_path_exists`. Those are now noted as deprecated in the docs but do not (yet) raise a warning. They may in the future.
 - Adds `or_` and `and_`. `(db.Q.a == 1) & (db.Q.b == 2) <==> (db.Q.a == 1).and_(db.Q.b == 2)`
