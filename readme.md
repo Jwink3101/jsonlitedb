@@ -35,15 +35,13 @@ With some fake data.
 
 
 ```python
->>> import init_demo_mode  # setup for the demo. IGNORE in practice
->>> 
 >>> import jsonlitedb
 >>> from jsonlitedb import JSONLiteDB
 >>> 
 >>> print(f"{jsonlitedb.__version__ = }")
 ```
 
-    jsonlitedb.__version__ = '0.4.1'
+    jsonlitedb.__version__ = '0.5.0'
 
 
 
@@ -502,24 +500,37 @@ Note that while something like `10 <= var <= 20` is valid Python, a query must b
 
     (10 <= db.Q.var) & (db.Q.var <= 20 )
 
-And, as noted in "Basic Usage," they can do SQL `LIKE` comparisons (`db.Q.key % "%Val%"`), `GLOB` comparisons (`db.Q.key * "file*.txt"`), and `REGEXP` comparisons (`db.Q.key @ "\S+?\.[A-Z]"`).  
+And, as noted in "Basic Usage," they can do SQL `LIKE` comparisons (`db.Q.key % "%Val%"`), `GLOB` comparisons (`db.Q.key * "file*.txt"`), and opt-in `REGEXP` comparisons (`db.Q.key @ "\S+?\.[A-Z]"`).  
 
-### REGEXP Safety Toggle
+### REGEXP Opt-In
 
-`REGEXP` (the `@` query operator) uses Python's `re` engine and may be unsafe for untrusted patterns.
+`REGEXP` (the `@` query operator) uses Python's `re` engine and may be unsafe for untrusted patterns. It is therefore disabled by default.
 
-To disable it, set the environment variable before importing/creating a database:
+To enable it, set the environment variable before importing/creating a database:
+
+```bash
+export JSONLITEDB_ENABLE_REGEX=1
+```
+
+You can also enable it in code (for new queries and new connections) after import:
+
+```python
+import jsonlitedb
+jsonlitedb.ENABLE_REGEX = True
+```
+
+If you need to force it off, the legacy disable flag still overrides opt-in:
 
 ```bash
 export JSONLITEDB_DISABLE_REGEX=1
 ```
 
-You can also disable it in code (for new connections) after import:
-
 ```python
 import jsonlitedb
 jsonlitedb.DISABLE_REGEX = True
 ```
+
+When disabled, attempting to build a `REGEXP` query raises an error before SQL is sent to SQLite. This is intentional so the behavior does not depend on whether the underlying SQLite build happens to provide a `REGEXP` function.
   
 #### Form
 
@@ -559,6 +570,13 @@ It can also dump a database to JSONL.
 - Functionally identical queries may not match for an index because SQLite is *extremely strict* about the pattern. Mitigate by using the same query mechanics for index creation and query. 
 - There is no distinction made between an entry having a key with a value of `None` vs. not having the key. However, you can use `query_by_path_exists()` to query items that have a certain path. There is no way still to mix this with other queries testing existence other than with `None`.  
 - While it will accept non-dict items like strings, lists, and tuples as a single item, queries on these do not work reliably.
+
+## Vendoring
+
+The core library is intentionally self-contained in `jsonlitedb/jsonlitedb.py`, so vendoring the database implementation into another project is straightforward.
+
+If you do that, note that the packaged distribution also includes separate `__init__.py` and CLI support.
+
 
 ## Similar tools and inspiration
 

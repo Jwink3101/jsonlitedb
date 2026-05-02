@@ -85,6 +85,8 @@ def run_replace_convert(file):
                     out.append(line)
                     break
                 else:
+                    if "import init_demo_mode" in line:
+                        continue
                     out.append(">>> " + line)
     body = "\n".join(out)
 

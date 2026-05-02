@@ -2,6 +2,13 @@
 
 Newest on top
 
+## 0.5.0 (2026-05-02)
+
+- Used ChatGPT 5.4 + Codex to perform a security review. Made the following changes in light of those results
+- **Potentially Breaking Change**: `REGEXP` / `@` queries are now opt-in via `JSONLITEDB_ENABLE_REGEX=1` or `jsonlitedb.ENABLE_REGEX = True`
+- Hardened regex disablement so disabled mode raises immediately in JSONLiteDB instead of depending on SQLite's `REGEXP` behavior
+- **Potentially Breaking Change**: Invalid table names now raise `ValueError` instead of being silently rewritten
+
 ## 0.4.1 (2026-03-22)
 
 * Adds `JSONLiteDB.create()` to ensure there is no existing db there
@@ -9,7 +16,7 @@ Newest on top
 
 ## 0.4.0 (2026-02-27)
 
-- Add `Query.exists_()` and `Query.missing_()`. These remove the need for `JSONLiteDB.count_by_path_exists` and `JSONLiteDB.count_by_path_exists`. Those are now noted as deprecated in the docs but do not (yet) raise a warning. They may in the future.
+- Add `Query.exists_()` and `Query.missing_()`. These remove the need for `JSONLiteDB.query_by_path_exists` and `JSONLiteDB.count_by_path_exists`. Those are now noted as deprecated in the docs but do not (yet) raise a warning. They may in the future.
 - Adds `or_` and `and_`. `(db.Q.a == 1) & (db.Q.b == 2) <==> (db.Q.a == 1).and_(db.Q.b == 2)`
     - Also add `not_` though this breaks the fluent flow. `(~(db.Q.a == 1)) & (db.Q.b == 2) <==> (db.Q.a == 1).not_().and_(db.Q.b == 2)`
     - Complex example:

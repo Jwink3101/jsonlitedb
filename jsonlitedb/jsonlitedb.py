@@ -18,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 __all__ = [
     "AssignedQueryError",
@@ -31,6 +31,7 @@ __all__ = [
     "Q",
     "Query",
     "QueryResult",
+    "RegexDisabledError",
     "Row",
     "sqlite_quote",
 ]
@@ -39,6 +40,7 @@ if sys.version_info < (3, 9):  # pragma: no cover
     raise ImportError("Must use Python >= 3.9")
 
 DEFAULT_TABLE = "items"
+VALID_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _env_to_bool(name, default="false"):
@@ -46,11 +48,19 @@ def _env_to_bool(name, default="false"):
     return str(val).strip().lower() in {"1", "true", "yes", "on"}
 
 
-# Set this (or JSONLITEDB_DISABLE_REGEX=1) to disable the REGEXP operator.
-# This is useful when query patterns may come from untrusted input.
+# REGEXP is opt-in because it uses Python's `re` engine and can be unsafe
+# for attacker-controlled patterns. The legacy disable flag still wins if set.
+ENABLE_REGEX = _env_to_bool("JSONLITEDB_ENABLE_REGEX", "false")
 DISABLE_REGEX = _env_to_bool("JSONLITEDB_DISABLE_REGEX", "false")
 
 DISABLE_METADATA = _env_to_bool("JSONLITEDB_DISABLE_META", "false")
+
+
+def regex_enabled():
+    """
+    Return whether REGEXP support is enabled for new queries/connections.
+    """
+    return ENABLE_REGEX and not DISABLE_REGEX
 
 
 class JSONLiteDB:
@@ -72,7 +82,7 @@ class JSONLiteDB:
         WAL mode manually using `execute()` if you need finer control.
     table : str, optional
         Table name to store documents. Defaults to 'items'. The name is
-        sanitized to alphanumerics and underscores.
+        validated against ``^[A-Za-z_][A-Za-z0-9_]*$``.
     **sqlitekws : keyword arguments
         Extra keyword arguments passed to `sqlite3.connect`.
 
@@ -114,7 +124,7 @@ class JSONLiteDB:
 
         self._configure_connection(self.db)
 
-        self.table = "".join(c for c in table if c == "_" or c.isalnum())
+        self.table = self._validate_table_name(table)
         logger.debug(f"{self.table = }")
 
         self.context_count = 0
@@ -124,8 +134,34 @@ class JSONLiteDB:
     def _configure_connection(self, db):
         db.row_factory = Row
         db.set_trace_callback(sqldebug)
-        if not DISABLE_REGEX:
+        if regex_enabled():
             db.create_function("REGEXP", 2, regexp, deterministic=True)
+
+    @staticmethod
+    def _validate_table_name(table):
+        """
+        Validate a table name for direct SQL identifier interpolation.
+
+        Parameters
+        ----------
+        table : str
+            Proposed SQLite table name.
+
+        Returns
+        -------
+        str
+            The validated table name.
+
+        Raises
+        ------
+        ValueError
+            If ``table`` is not a valid SQL identifier for JSONLiteDB.
+        """
+        if not isinstance(table, str):
+            raise ValueError("Invalid table name: must be a string")
+        if not VALID_TABLE_RE.fullmatch(table):
+            raise ValueError("Invalid table name: must match ^[A-Za-z_][A-Za-z0-9_]*$")
+        return table
 
     @classmethod
     def connect(cls, *args, **kwargs):
@@ -441,11 +477,12 @@ class JSONLiteDB:
         Operators supported: ==, !=, >, >=, <, <= plus:
         - LIKE:  `db.Q.key % "pat%tern"`
         - GLOB:  `db.Q.key * "glob*pattern"`
-        - REGEXP: `db.Q.key @ "regex.*"` (Python `re`)
+        - REGEXP: `db.Q.key @ "regex.*"` (Python `re`, opt-in only)
 
         Notes
         -----
-        - REGEXP uses Python's `re` and is often slower than LIKE/GLOB.
+        - REGEXP uses Python's `re`, is often slower than LIKE/GLOB, and is
+          disabled by default. Enable it only for trusted patterns.
         - Index usage depends on JSON path form. `$.key.subkey` is not the
           same as `("key", "subkey")` for index matching.
         - `db.query` is also available as `db()` and `db.search()`.
@@ -1806,7 +1843,9 @@ class QueryResult:
 
 def regexp(pattern, string):
     """SQLite REGEXP callback using Python's `re` module."""
-    return bool(re.search(pattern, string))
+    if pattern is None or string is None:
+        return False
+    return bool(re.search(str(pattern), str(string)))
 
 
 class MissingValueError(ValueError):
@@ -1828,6 +1867,14 @@ class DissallowedError(ValueError):
 class MissingRowIDError(ValueError):
     """
     Raised when an update operation lacks a required rowid.
+    """
+
+    pass
+
+
+class RegexDisabledError(ValueError):
+    """
+    Raised when REGEXP queries are attempted while regex support is disabled.
     """
 
     pass
@@ -1907,6 +1954,12 @@ class Query:
             raise DissallowedError(
                 "Cannot compare queries. For example, change "
                 '"4 <= db.Q.val <= 5" to "(4 <= db.Q.val) & (db.Q.val <= 5)"'
+            )
+
+        if sym == "REGEXP" and not regex_enabled():
+            raise RegexDisabledError(
+                "REGEXP queries are disabled. Set JSONLITEDB_ENABLE_REGEX=1 "
+                "or jsonlitedb.ENABLE_REGEX = True to opt in."
             )
 
         r = _query_tuple2jsonpath({tuple(self._key): val})  # Will just return one item

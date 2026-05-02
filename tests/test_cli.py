@@ -334,6 +334,27 @@ def test_cli_table_env_default_and_override(monkeypatch):
         Path(dbpath).unlink(missing_ok=True)
 
 
+def test_cli_rejects_invalid_table_option():
+    with MockArgv(
+        ["query", "!!!TMP!!!invalidtable.db", "--table", "items;drop"], shift=1
+    ):
+        with pytest.raises(
+            ValueError,
+            match=r"Invalid table name: must match \^\[A-Za-z_\]\[A-Za-z0-9_\]\*\$",
+        ):
+            cli()
+
+
+def test_cli_rejects_invalid_table_env(monkeypatch):
+    monkeypatch.setenv("JSONLITEDB_CLI_TABLE", "items;drop")
+    with MockArgv(["query", "!!!TMP!!!invalidtableenv.db"], shift=1):
+        with pytest.raises(
+            ValueError,
+            match=r"Invalid table name: must match \^\[A-Za-z_\]\[A-Za-z0-9_\]\*\$",
+        ):
+            cli()
+
+
 def test_cleanup_tmp_artifacts_removes_directory():
     base = Path("!!!TMP!!!cleanupdir")
     nested = base / "nested.txt"

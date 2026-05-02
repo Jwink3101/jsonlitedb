@@ -21,6 +21,7 @@ from jsonlitedb import (
     MissingValueError,
     Q,
     Query,
+    RegexDisabledError,
     Row,
     cli,
 )
@@ -284,10 +285,19 @@ def test_JSONLiteDB_general():
 
     assert db.count(db.Q.role % "prod%") == 1
     assert db.count(db.Q.role * "prod*") == 1
-    assert db.count(db.Q.role @ "prod") == 1
-    assert db.count(db.Q.role @ "prod.c") == 1
-    assert db.count(db.Q.role @ "prod.*r") == 1
-    assert db.count(db.Q.role @ "prod.x") == 0
+    old_enable = core.ENABLE_REGEX
+    old_disable = core.DISABLE_REGEX
+    core.ENABLE_REGEX = True
+    core.DISABLE_REGEX = False
+    try:
+        db_regex = JSONLiteDB(db.db, table=db.table)
+        assert db_regex.count(db_regex.Q.role @ "prod") == 1
+        assert db_regex.count(db_regex.Q.role @ "prod.c") == 1
+        assert db_regex.count(db_regex.Q.role @ "prod.*r") == 1
+        assert db_regex.count(db_regex.Q.role @ "prod.x") == 0
+    finally:
+        core.ENABLE_REGEX = old_enable
+        core.DISABLE_REGEX = old_disable
     assert db.count(_limit=2) == 2
     assert db.count(_limit=2, _orderby="-born") == 2
 
@@ -413,6 +423,24 @@ def test_JSONLiteDB_create_invalid_args():
         TypeError, match=r"JSONLiteDB\.create\(\) requires a filesystem path"
     ):
         JSONLiteDB.create(sqlite3.connect(":memory:"))
+
+
+@pytest.mark.parametrize(
+    "table",
+    ["", "123table", "items;drop", "items kv", "../../x", "unicode_é"],
+)
+def test_JSONLiteDB_rejects_invalid_table_names(table):
+    with pytest.raises(
+        ValueError,
+        match=r"Invalid table name: must match \^\[A-Za-z_\]\[A-Za-z0-9_\]\*\$",
+    ):
+        JSONLiteDB(":memory:", table=table)
+
+
+@pytest.mark.parametrize("table", [None, 123])
+def test_JSONLiteDB_rejects_non_string_table_names(table):
+    with pytest.raises(ValueError, match=r"Invalid table name: must be a string"):
+        JSONLiteDB(":memory:", table=table)
 
 
 def test_JSONLiteDB_dbconnection():
@@ -567,26 +595,34 @@ def test_JSONLiteDB_adv():
         }
     )
 
-    assert (
-        [
-            {
-                "first": "Peggy",
-                "last": "Line",
-                "phone": {"home": "505.555.3101"},
-                "kids": [
-                    {"first": "Jane", "last": "Line"},
-                    {"first": "Molly", "last": "Line"},
-                ],
-            }
-        ]
-        == list(db.query({("phone", "home"): "505.555.3101"}))
-        == list(db.query({'$."phone"."home"': "505.555.3101"}))
-        == list(db.query(db.Q.phone.home == "505.555.3101"))
-        == list(db.query({"$.phone.home": "505.555.3101"}))
-        == list(db.query(db.Q.phone.home % "505%"))
-        == list(db.query(db.Q.phone.home * "505*"))
-        == list(db.query(db.Q.phone.home @ "505.*"))
-    )
+    expected = [
+        {
+            "first": "Peggy",
+            "last": "Line",
+            "phone": {"home": "505.555.3101"},
+            "kids": [
+                {"first": "Jane", "last": "Line"},
+                {"first": "Molly", "last": "Line"},
+            ],
+        }
+    ]
+    assert expected == list(db.query({("phone", "home"): "505.555.3101"}))
+    assert expected == list(db.query({'$."phone"."home"': "505.555.3101"}))
+    assert expected == list(db.query(db.Q.phone.home == "505.555.3101"))
+    assert expected == list(db.query({"$.phone.home": "505.555.3101"}))
+    assert expected == list(db.query(db.Q.phone.home % "505%"))
+    assert expected == list(db.query(db.Q.phone.home * "505*"))
+
+    old_enable = core.ENABLE_REGEX
+    old_disable = core.DISABLE_REGEX
+    core.ENABLE_REGEX = True
+    core.DISABLE_REGEX = False
+    try:
+        db_regex = JSONLiteDB(db.db, table=db.table)
+        assert expected == list(db_regex.query(db_regex.Q.phone.home @ "505.*"))
+    finally:
+        core.ENABLE_REGEX = old_enable
+        core.DISABLE_REGEX = old_disable
 
     # Key Counts
     assert db.path_counts() == {
@@ -1115,17 +1151,25 @@ def test_Query():
         == "( ( JSON_EXTRACT(data, '$.\"val1\"') = val1 ) AND ( JSON_EXTRACT(data, '$.\"val2\"') = val2 ) )"
     )
 
-    # Tricks for LIKE, GLOB, and REGEXP
+    # Tricks for LIKE and GLOB
     assert (
         repr(Q().a % "TE%ST") == "Query(( JSON_EXTRACT(data, '$.\"a\"') LIKE 'TE%ST' ))"
     )
     assert (
         repr(Q().a * "TE*ST") == "Query(( JSON_EXTRACT(data, '$.\"a\"') GLOB 'TE*ST' ))"
     )
-    assert (
-        repr(Q().a @ "TE.ST")
-        == "Query(( JSON_EXTRACT(data, '$.\"a\"') REGEXP 'TE.ST' ))"
-    )
+    old_enable = core.ENABLE_REGEX
+    old_disable = core.DISABLE_REGEX
+    core.ENABLE_REGEX = True
+    core.DISABLE_REGEX = False
+    try:
+        assert (
+            repr(Q().a @ "TE.ST")
+            == "Query(( JSON_EXTRACT(data, '$.\"a\"') REGEXP 'TE.ST' ))"
+        )
+    finally:
+        core.ENABLE_REGEX = old_enable
+        core.DISABLE_REGEX = old_disable
 
     # DO NOT allow paired comparisons
     with pytest.raises(ValueError):
@@ -1260,15 +1304,47 @@ def test_query_placeholder_token_in_path():
     assert rows == [item]
 
 
-def test_disable_regex():
+def test_regex_disabled_by_default():
+    old_enable = core.ENABLE_REGEX
     old_disable = core.DISABLE_REGEX
+    core.ENABLE_REGEX = False
+    core.DISABLE_REGEX = False
+    try:
+        db = JSONLiteDB(":memory:")
+        db.insert({"a": "TE.ST"})
+        with pytest.raises(RegexDisabledError, match="REGEXP queries are disabled"):
+            db.query(db.Q.a @ "TE.ST").all()
+    finally:
+        core.ENABLE_REGEX = old_enable
+        core.DISABLE_REGEX = old_disable
+
+
+def test_regex_opt_in_enables_regexp():
+    old_enable = core.ENABLE_REGEX
+    old_disable = core.DISABLE_REGEX
+    core.ENABLE_REGEX = True
+    core.DISABLE_REGEX = False
+    try:
+        db = JSONLiteDB(":memory:")
+        db.insert({"a": "TE.ST"}, {"a": "OTHER"})
+        assert db.query(db.Q.a @ "TE.ST").all() == [{"a": "TE.ST"}]
+    finally:
+        core.ENABLE_REGEX = old_enable
+        core.DISABLE_REGEX = old_disable
+
+
+def test_disable_regex_still_overrides_opt_in():
+    old_enable = core.ENABLE_REGEX
+    old_disable = core.DISABLE_REGEX
+    core.ENABLE_REGEX = True
     core.DISABLE_REGEX = True
     try:
         db = JSONLiteDB(":memory:")
         db.insert({"a": "TE.ST"})
-        with pytest.raises(sqlite3.OperationalError, match="no such function: REGEXP"):
+        with pytest.raises(RegexDisabledError, match="REGEXP queries are disabled"):
             db.query(db.Q.a @ "TE.ST").all()
     finally:
+        core.ENABLE_REGEX = old_enable
         core.DISABLE_REGEX = old_disable
 
 
@@ -1283,6 +1359,11 @@ def test_init_handles_missing_metadata_table():
         assert db.count() == 0
     finally:
         JSONLiteDB.about = old_about
+
+
+def test_regexp_returns_false_for_null_operands():
+    assert core.regexp(None, "abc") is False
+    assert core.regexp("abc", None) is False
 
 
 def test_init_reraises_unexpected_operational_error():

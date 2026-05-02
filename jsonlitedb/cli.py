@@ -287,7 +287,8 @@ def cli():
 
         Notes:
           `query` supports simple equality filters and path-based sorting only.
-          Use Python `JSONLiteDB.query(...)` for OR/NOT, inequalities, LIKE/GLOB/REGEXP,
+          Use Python `JSONLiteDB.query(...)` for OR/NOT, inequalities, LIKE/GLOB/REGEXP
+          (when enabled),
           and other advanced query composition.
         """
     )
