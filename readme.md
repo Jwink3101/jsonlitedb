@@ -96,7 +96,7 @@ Can also use a context manager (`with db: ...`) to batch the insertions (or dele
 
 ### Simple Queries
 
-Let's do some simple queries. The default `query()` returns an iterator so we wrap them in a list.
+Let's do some simple queries. The default `query()` returns an iterator so we can wrap them in a list or `.all()`.
 
 
 ```python
@@ -111,10 +111,10 @@ Let's do some simple queries. The default `query()` returns an iterator so we wr
 
 
 
+When you only want one, you can do `db.query(...).one()` but that still queries all. Instead, use `db.one()`. On the SQL call, this adds `LIMIT 1`
+
 
 ```python
->>> # If you only one the first result, you can use db.one().
->>> # On the SQL call, this adds "LIMIT 1"
 >>> db.one(first="George", last="Martin")
 ```
 
@@ -125,25 +125,12 @@ Let's do some simple queries. The default `query()` returns an iterator so we wr
 
 
 
+Now let's query with a dictionary to match.
 
-```python
->>> # This will also only give you the first row but it is
->>> # less efficient as it doesn't have a "LIMIT 1" clause.
->>> db.query(first="George", last="Martin").one()
-```
-
-
-
-
-    {'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'}
-
-
-
-Now let's query with a dictionary to match
+Queries return a QueryResult which can be iterated. list(QueryResult) <==> QueryResult.all()
 
 
 ```python
->>> # queries return a QueryResult which can be iterated. list(QueryResult) <==> QueryResult.all()
 >>> list(db.query({"first": "George"}))
 ```
 
@@ -155,7 +142,7 @@ Now let's query with a dictionary to match
 
 
 
-Multiples are always an AND query
+Multiples are always an AND query. See Query Objects below for more flexibility.
 
 
 ```python
@@ -169,7 +156,7 @@ Multiples are always an AND query
 
 
 
-Can do seperate items but it makes no difference.
+Can do seperate items but it makes no difference. The dictionaries are unioned.
 
 
 ```python
@@ -182,6 +169,8 @@ Can do seperate items but it makes no difference.
     [{'first': 'George', 'last': 'Martin', 'born': 1926, 'role': 'producer'}]
 
 
+
+If all you need is the count, use `db.count(...)` instead of counting the results. This does that count at the SQL level.
 
 
 ```python
@@ -212,7 +201,7 @@ Query objects enable more complex combinations and inequalities. Query objects c
 
 
 
-Note that you need to be careful with parentheses as the operator precedance for the `&` and `|` are very high
+Note that you **need to be careful with parentheses** as the operator precedance for the `&` and `|` are very high!
 
 
 ```python
@@ -226,7 +215,7 @@ Note that you need to be careful with parentheses as the operator precedance for
 
 
 
-Same as:
+You can also use a more fluent approach with `.and_()`, `or_()`, and `.not_()`
 
 
 ```python
@@ -260,7 +249,7 @@ In addition they support
 
 - `%` : `LIKE`
 - `*` : `GLOB`
-- `@` : `REGEXP` using Python's regex module. Note that this can be disabled for untrusted input.
+- `@` : `REGEXP` using Python's regex module. Note that this is DISABLED by default
 
 
 
@@ -280,9 +269,9 @@ In addition they support
 
 ### Sorting / Ordering
 
-JSONLiteDB supports `_orderby` on `query()` (and those that wrap it) and `query_by_path_exists()` (see Advanced Usage)
+JSONLiteDB supports `_orderby` on `query()` and helpers that wrap it, such as `one()` and `count()` (see Advanced Usage).
 
-The input is effectively the same as those for a query but (a) do not have values assigned and (b) can take "+" (ascending,default) or "-" (descending) construction. See the help for `query()` for more details including how it is used with the different forms
+The input is effectively the same as a query path, but it does not include a value and can use "+" for ascending order (the default) or "-" for descending order. See the help for `query()` for more details, including how ordering works with the different path forms.
 
 
 ```python
@@ -330,9 +319,9 @@ You can sort by subkeys and subelements as well with a similar syntax to queries
 
 ### Speeding up queries
 
-Queries can be **greatly accelerated** with an index. Note that SQLite is *extremely* picky about how you write the index! For the most part, if you the same method to query as write the index, you will be fine. (This is more of an issue with nested queries and *advanced* formulating of the query).
+Queries can be **greatly accelerated** with an index. Note that SQLite is *extremely* picky about how you write the index! For the most part, if you use the same path form for the query and the index, you will be fine. (This is more of an issue with nested queries and *advanced* query formulations.)
 
-The name of the index is imaterial. It is based on the fields. It will look different
+The name of the index is immaterial. It is derived from the fields, so it may look different from these examples.
 
 
 ```python
@@ -347,9 +336,10 @@ The name of the index is imaterial. It is based on the fields. It will look diff
 
 
 
+Of course, with four items, this makes little difference but can **greatly accelerate** hot query paths.
+
 
 ```python
->>> # of course, with four items, this makes little difference
 >>> list(db.query(last="Martin"))
 ```
 
@@ -382,7 +372,7 @@ And an index can also be used to enforce uniqueness amongst one or more fields
 >>> # Causes: IntegrityError: UNIQUE constraint failed: index 'ix_items_250e4243_UNIQUE'
 ```
 
-See *Advanced Usage* for more examples including nested queries
+See *Advanced Usage* for more examples including nested queries and more complex logic.
 <!--- END AUTO GENERATED -->
 
 ## Queries and Paths
@@ -498,7 +488,8 @@ or
     
 Note that while something like `10 <= var <= 20` is valid Python, a query must be done like:
 
-    (10 <= db.Q.var) & (db.Q.var <= 20 )
+    (10 <= db.Q.var) & (db.Q.var <= 20)
+    (10 <= db.Q.var).and_(db.Q.var <= 20)
 
 And, as noted in "Basic Usage," they can do SQL `LIKE` comparisons (`db.Q.key % "%Val%"`), `GLOB` comparisons (`db.Q.key * "file*.txt"`), and opt-in `REGEXP` comparisons (`db.Q.key @ "\S+?\.[A-Z]"`).  
 
@@ -568,7 +559,7 @@ It can also dump a database to JSONL.
 
 - Dictionary keys must be strings without a dot, double quote, square bracket, and may not start with `_`, `+`, or `-`. Some of these may work but could have unexpected and untested consequences.
 - Functionally identical queries may not match for an index because SQLite is *extremely strict* about the pattern. Mitigate by using the same query mechanics for index creation and query. 
-- There is no distinction made between an entry having a key with a value of `None` vs. not having the key. However, you can use `query_by_path_exists()` to query items that have a certain path. There is no way still to mix this with other queries testing existence other than with `None`.  
+- Equality-style `None` queries do not distinguish between a key set to `None` and a missing key. Use `db.Q.path.exists_()` and `db.Q.path.missing_()` with `query()` or `count()` when you need to test path existence; these predicates can be composed with other query conditions.
 - While it will accept non-dict items like strings, lists, and tuples as a single item, queries on these do not work reliably.
 
 ## Vendoring
@@ -591,13 +582,13 @@ Many ideas were borrowed but they all have different tradeoffs. JSONLiteDB's API
 
 ### Wouldn't it be better to use different SQL columns rather than all as JSON?
 
-Yes and no. The idea is the complete lack of schema needed and as a notable improvement to a JSON file. Plus, if you index the field of interest, you get super-fast queries all the same!
+Yes and no. The idea is the complete lack of schema needed and as a notable improvement to a JSON file. Plus, if you index the field of interest, you get super-fast queries all the same! If this is an important feature, check out [Dataset](https://github.com/pudo/dataset).
 
 ### Aren't there other embedded object databases that are purpose built rather than on top of SQLite?
 
 Yes! The idea is simplicity and compatibility. SQLite basically runs everywhere and is widely accepted. It is only a slight step down from JSON Lines in being future proof. 
 
-There really aren't any other single-file, embedded [JSON] object storage databases with anywhere near the ubiquity or pedigree of SQLite.
+There really aren't any other single-file, embedded \[JSON\] object storage databases with anywhere near the ubiquity or pedigree of SQLite.
 
 ### When using `duplicates='replace'`, it essentially deletes and inserts the item rather than replacing it for real (and keeping the `rowid` internally). Is that intended?
 
@@ -609,9 +600,25 @@ JSONLiteDB provides a lot of functionality between queries and sorting but if yo
 
 Similarly, the minimal CLI can help in some cases but JSONLiteDB is really meant to be accessed as a library.
 
+### I created an index but when I test with `explain_query()`, it isn't being used.
+
+Chances are you have an index on something that is *functionally* correct but still different and therefore unrecognized by SQLite. For example: `'$.itemkey.subkey[4]'` and `('itemkey','subkey',4)` are functionally identical but will not use the same index. The latter resolves to `'$."itemkey"."subkey"[4]'`
+
 ### Can I use a custom encoder?
 
 Yes and no. You can use your own methods to encode the object you insert but since it uses SQLite's `JSON1`, it must be JSON that gets stored. You could probably hack something else into it but it is not recommended.
+
+### When Should or Shouldn't I Use JSONLiteDB?
+
+JSONLiteDB is useful when you want to store JSON-like Python dictionaries without designing a full relational schema, but still want SQLite durability, querying, sorting, and indexes. It is also good when you do not want to have to write the entire file for every update or delete. It fits small to medium local databases, scripts, CLI tools, cached API responses, lightweight app state, and workflows where records may not all share the same shape.
+
+It is usually not the right tool for heavily relational data, complex joins, high-write-concurrency systems, strict schemas with migrations, or large analytical workloads. In those cases, use SQLite directly with normalized tables, another relational database, or a document database designed for that scale.
+
+### Why is REGEXP disabled by default?
+
+REGEXP queries (`@`) rely on Python's `re` module, which can suffer from ReDoS (regular expression denial of service) through catastrophic backtracking. This does *not* pose a data exfiltration risk, but an expensive pattern can degrade performance or tie up the process.
+
+Because REGEXP is evaluated in Python, it is also slower than SQLite's `GLOB` (`*`) or `LIKE` (`%`) operators. Those SQLite operators are faster in general and can sometimes use an index, depending on the index and query shape.
 
 ## AI/LLM/Agent Disclosure
 
