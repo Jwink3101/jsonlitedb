@@ -2,6 +2,14 @@
 
 Newest on top
 
+## 0.5.1 (2026-05-08)
+
+- Added an array query mode using `[:]` to tell JSONLiteDB to use a table-valued query. Enables queries like `db.Q.tags[:] == 'red'` to search all tags.
+- Adds `db.Q.rowid_` for sorting by the internal rowid
+- *Minor*: Fixed a ResourceWarning on 3.14+ related to the temp SQLite DB used in the quote function.
+
+ChatGPT 5.5 + Codex was used to add this feature. The code has been reviewed and verified by human developers
+
 ## 0.5.0 (2026-05-02)
 
 - Used ChatGPT 5.4 + Codex to perform a security review. Made the following changes in light of those results

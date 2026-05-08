@@ -41,7 +41,7 @@ With some fake data.
 >>> print(f"{jsonlitedb.__version__ = }")
 ```
 
-    jsonlitedb.__version__ = '0.5.0'
+    jsonlitedb.__version__ = '0.5.1'
 
 
 
@@ -271,7 +271,7 @@ In addition they support
 
 JSONLiteDB supports `_orderby` on `query()` and helpers that wrap it, such as `one()` and `count()` (see Advanced Usage).
 
-The input is effectively the same as a query path, but it does not include a value and can use "+" for ascending order (the default) or "-" for descending order. See the help for `query()` for more details, including how ordering works with the different path forms.
+The input is effectively the same as a query path, but it does not include a value and can use "+" for ascending order (the default) or "-" for descending order. See the help for `query()` for more details, including how ordering works with the different path forms. There is also a special `db.Q.rowid_` object you can use for sorting.
 
 
 ```python

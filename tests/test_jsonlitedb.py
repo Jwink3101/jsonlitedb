@@ -26,7 +26,10 @@ from jsonlitedb import (
     cli,
 )
 from jsonlitedb import jsonlitedb as core
-from jsonlitedb import parse_cli_filter_value, sqlite_quote
+from jsonlitedb import (
+    parse_cli_filter_value,
+    sqlite_quote,
+)
 
 
 def test_JSONLiteDB_general():
@@ -108,6 +111,12 @@ def test_JSONLiteDB_general():
         {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
         {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
     ]
+    assert [item.rowid for item in db.query(_orderby=db.Q.rowid_)] == [1, 2, 3, 4, 5]
+    assert [item.rowid for item in db.query(_orderby=-db.Q.rowid_)] == [5, 4, 3, 2, 1]
+    assert [
+        item.rowid
+        for item in db.query(first="George", _orderby=[db.Q.role, db.Q.rowid_])
+    ] == [3, 5]
 
     # Add repeat items
     for item in items:
@@ -320,18 +329,13 @@ def test_JSONLiteDB_general():
     assert len(list(db)) == 5
 
     # Directly execute
-    assert (
-        db.execute(
-            """
+    assert db.execute("""
             SELECT
                 data ->> '$.first' as FiRsT
             FROM mytable
             WHERE
                 JSON_EXTRACT(data,'$.last') == 'Lennon'
-            """
-        ).fetchone()["FiRsT"]
-        == "John"
-    )
+            """).fetchone()["FiRsT"] == "John"
 
     # Purge
     assert len(db) > 0  # baseline
@@ -422,7 +426,11 @@ def test_JSONLiteDB_create_invalid_args():
     with pytest.raises(
         TypeError, match=r"JSONLiteDB\.create\(\) requires a filesystem path"
     ):
-        JSONLiteDB.create(sqlite3.connect(":memory:"))
+        conn = sqlite3.connect(":memory:")
+        try:
+            JSONLiteDB.create(conn)
+        finally:
+            conn.close()
 
 
 @pytest.mark.parametrize(
@@ -452,11 +460,9 @@ def test_JSONLiteDB_dbconnection():
     repr(db1)
     db1.insert(dict(key="value", other=dict(key="other value")))
 
-    row = db0.execute(
-        """
+    row = db0.execute("""
     SELECT data
-    FROM items"""
-    ).fetchall()
+    FROM items""").fetchall()
     assert len(row) == 1
     assert json.loads(row[0]["data"]) == {
         "key": "value",
@@ -562,6 +568,7 @@ def test_JSONLiteDB_adv():
                 {"first": "John Jr.", "last": "Smith"},
                 {"first": "Jane", "last": "Smith"},
             ],
+            "hobbies": ["boxing", "biking"],
         }
     )
     db.insert(
@@ -573,6 +580,7 @@ def test_JSONLiteDB_adv():
             "extra": "This is extra",
             "extra1": {"extra2": "even more extra"},
             "extra2": None,
+            "hobbies": ["reading"],
         }
     )
     db.insert(
@@ -584,6 +592,7 @@ def test_JSONLiteDB_adv():
                 {"first": "Jane", "last": "Line"},
                 {"first": "Molly", "last": "Line"},
             ],
+            "hobbies": ["reading", "writing"],
         }
     )
     db.insert(
@@ -592,6 +601,18 @@ def test_JSONLiteDB_adv():
             "last": "Truss",
             "phone": {"home": "610.555.2647"},
             "kids": [{"first": "Janet", "last": "Truss"}],
+            "hobbies": [],
+            "groups": [{"members": []}, {"members": [{"name": "Sam"}]}],
+        }
+    )
+    db.insert(
+        {
+            "first": "Ava",
+            "last": "North",
+            "phone": {"home": "303.555.1111"},
+            "kids": [{"first": "Nina", "last": "North"}],
+            "hobbies": ["painting"],
+            "groups": [{"members": [{"name": "Jane"}]}, {"members": []}],
         }
     )
 
@@ -604,6 +625,7 @@ def test_JSONLiteDB_adv():
                 {"first": "Jane", "last": "Line"},
                 {"first": "Molly", "last": "Line"},
             ],
+            "hobbies": ["reading", "writing"],
         }
     ]
     assert expected == list(db.query({("phone", "home"): "505.555.3101"}))
@@ -612,6 +634,35 @@ def test_JSONLiteDB_adv():
     assert expected == list(db.query({"$.phone.home": "505.555.3101"}))
     assert expected == list(db.query(db.Q.phone.home % "505%"))
     assert expected == list(db.query(db.Q.phone.home * "505*"))
+    assert [item["first"] for item in db.query(db.Q.kids[:].first == "Jane")] == [
+        "John",
+        "Peggy",
+    ]
+    assert [item["first"] for item in db.query(db.Q.hobbies[:] == "reading")] == [
+        "Clark",
+        "Peggy",
+    ]
+    assert [item["first"] for item in db.query(db.Q.hobbies.empty())] == ["Luke"]
+    assert [item["first"] for item in db.query(db.Q.hobbies.not_empty())] == [
+        "John",
+        "Clark",
+        "Peggy",
+        "Ava",
+    ]
+    assert db.count(db.Q.kids[:].first == "Jane") == 2
+    assert db.one(db.Q.kids[:].first == "Jane", _orderby="first")["first"] == "John"
+    assert db.count(~(db.Q.hobbies[:] == "reading")) == 3
+    assert db.count(db.Q.kids[:].first != "Jane") == 4
+    assert db.count(db.Q.kids[:].middle == None) == 4
+    assert db.count(db.Q.kids[:].middle != None) == 0
+    assert [item["first"] for item in db.query(db.Q.groups[:].members.empty())] == [
+        "Luke",
+        "Ava",
+    ]
+    assert [
+        item["first"] for item in db.query(db.Q.groups[:].members[:].name == "Jane")
+    ] == ["Ava"]
+    assert db.count(db.Q.groups[:].members.not_empty()) == 2
 
     old_enable = core.ENABLE_REGEX
     old_disable = core.DISABLE_REGEX
@@ -626,10 +677,12 @@ def test_JSONLiteDB_adv():
 
     # Key Counts
     assert db.path_counts() == {
-        "first": 4,
-        "kids": 4,
-        "last": 4,
-        "phone": 4,
+        "first": 5,
+        "groups": 2,
+        "hobbies": 5,
+        "kids": 5,
+        "last": 5,
+        "phone": 5,
         "extra": 1,
         "extra1": 1,
         "extra2": 1,
@@ -640,6 +693,8 @@ def test_JSONLiteDB_adv():
         "extra1",
         "extra2",
         "first",
+        "groups",
+        "hobbies",
         "kids",
         "last",
         "phone",
@@ -658,19 +713,19 @@ def test_JSONLiteDB_adv():
     # Test query by null
     assert [item["first"] for item in db.query(db.Q.extra != None)] == ["Clark"]
     assert db.count(db.Q.extra1 != None) == 1  # has extra1
-    assert db.count(db.Q.extra1 == None) == 3  # does not have extra1
+    assert db.count(db.Q.extra1 == None) == 4  # does not have extra1
 
     # Test known issue. Cannot distinguish between None and missing.
     # But then use
     assert db.count(db.Q.extra2 != None) == 0
-    assert db.count(db.Q.extra2 == None) == 4
+    assert db.count(db.Q.extra2 == None) == 5
 
     assert db.count(db.Q.made.up.key != None) == 0
-    assert db.count(db.Q.made.up.key == None) == 4
+    assert db.count(db.Q.made.up.key == None) == 5
     assert db.count(db.Q.extra2.exists_()) == 1
-    assert db.count(db.Q.extra2.missing_()) == 3
+    assert db.count(db.Q.extra2.missing_()) == 4
     assert db.count(db.Q.made.up.key.exists_()) == 0
-    assert db.count(db.Q.made.up.key.missing_()) == 4
+    assert db.count(db.Q.made.up.key.missing_()) == 5
 
     # Preferred/new API: use exists_()/missing_() predicates in query/count.
     # query_by_path_exists()/count_by_path_exists() are compatibility helpers
@@ -683,6 +738,7 @@ def test_JSONLiteDB_adv():
             "extra1": {"extra2": "even more extra"},
             "extra2": None,
             "first": "Clark",
+            "hobbies": ["reading"],
             "kids": [],
             "last": "Drake",
             "phone": {"home": "412.555.4960", "work": "410.555.9903"},
@@ -705,6 +761,7 @@ def test_JSONLiteDB_adv():
     assert list(db.query_by_path_exists(db.Q.kids[1])) == [
         {
             "first": "John",
+            "hobbies": ["boxing", "biking"],
             "kids": [
                 {"first": "John Jr.", "last": "Smith"},
                 {"first": "Jane", "last": "Smith"},
@@ -714,6 +771,7 @@ def test_JSONLiteDB_adv():
         },
         {
             "first": "Peggy",
+            "hobbies": ["reading", "writing"],
             "kids": [
                 {"first": "Jane", "last": "Line"},
                 {"first": "Molly", "last": "Line"},
@@ -1004,6 +1062,7 @@ def test_Query():
     )
     assert (Query() + "a")._key == ["a"]
     assert (Query() + "a" + 1 + 3)._key == ["a", 1, 3]
+    assert Query().key[:]._key == ["key", slice(None, None, None)]
 
     # Errors
     with pytest.raises(DissallowedError):
@@ -1038,6 +1097,18 @@ def test_Query():
         (Query().a == 1).exists_()
     with pytest.raises(DissallowedError):
         (Query().a == 1).missing_()
+    with pytest.raises(DissallowedError):
+        Query().a[:].exists_()
+    with pytest.raises(DissallowedError):
+        Query().a[:].missing_()
+    with pytest.raises(DissallowedError):
+        (Query().a == 1).empty()
+    with pytest.raises(DissallowedError):
+        (Query().a == 1).not_empty()
+    with pytest.raises(ValueError):
+        Query().a[1:]
+    with pytest.raises(ValueError):
+        Query().a[:, 1]
 
     q1 = Query().a["b"] < 10
     q2 = Query()["a", "b"] < 10
@@ -1130,6 +1201,8 @@ def test_Query():
 
     assert repr(Query().key) == "Query(JSON_EXTRACT(data, '$.\"key\"'))"
     assert repr(Query().key.subkey) == 'Query(JSON_EXTRACT(data, \'$."key"."subkey"\'))'
+    assert repr(Query()[2].key[:]) == "Query(PATH($[2].key[:]))"
+    assert repr(Query().key[:]) == "Query(PATH($.key[:]))"
     assert repr(Query()) == "Query()"
 
     q = Query().a > "A"
@@ -1158,6 +1231,8 @@ def test_Query():
     assert (
         repr(Q().a * "TE*ST") == "Query(( JSON_EXTRACT(data, '$.\"a\"') GLOB 'TE*ST' ))"
     )
+    assert "JSON_EACH(data, '$.\"a\"')" in repr(Q().a[:] == "TE")
+    assert "JSON_ARRAY_LENGTH(data, '$.\"a\"') = 0" in repr(Q().a.empty())
     old_enable = core.ENABLE_REGEX
     old_disable = core.DISABLE_REGEX
     core.ENABLE_REGEX = True
@@ -1259,6 +1334,9 @@ def test_build_index_paths():
 
     with pytest.raises(AssignedQueryError):
         core.build_index_paths({"key": "val"})
+
+    with pytest.raises(ValueError):
+        core.build_index_paths(Query().key[:])
 
 
 def test_query2sql():
@@ -1405,46 +1483,52 @@ def test_build_orderby_pairs():
 
     tests = [
         # Type 1
-        ("$.key", [("$.key", "ASC")]),
-        ("+$.key", [("$.key", "ASC")]),
-        ("-$.key", [("$.key", "DESC")]),
-        ("$.key.subkey", [("$.key.subkey", "ASC")]),
-        ("+$.key.subkey", [("$.key.subkey", "ASC")]),
-        ("-$.key.subkey", [("$.key.subkey", "DESC")]),
-        ("$.key.subkey[3]", [("$.key.subkey[3]", "ASC")]),
-        ("+$.key.subkey[3]", [("$.key.subkey[3]", "ASC")]),
-        ("-$.key.subkey[3]", [("$.key.subkey[3]", "DESC")]),
+        ("$.key", [("$.key", "ASC", "json")]),
+        ("+$.key", [("$.key", "ASC", "json")]),
+        ("-$.key", [("$.key", "DESC", "json")]),
+        ("$.key.subkey", [("$.key.subkey", "ASC", "json")]),
+        ("+$.key.subkey", [("$.key.subkey", "ASC", "json")]),
+        ("-$.key.subkey", [("$.key.subkey", "DESC", "json")]),
+        ("$.key.subkey[3]", [("$.key.subkey[3]", "ASC", "json")]),
+        ("+$.key.subkey[3]", [("$.key.subkey[3]", "ASC", "json")]),
+        ("-$.key.subkey[3]", [("$.key.subkey[3]", "DESC", "json")]),
         # Type 2
-        ("key", [('$."key"', "ASC")]),
-        ("+key", [('$."key"', "ASC")]),
-        ("-key", [('$."key"', "DESC")]),
+        ("key", [('$."key"', "ASC", "json")]),
+        ("+key", [('$."key"', "ASC", "json")]),
+        ("-key", [('$."key"', "DESC", "json")]),
         # Type 3
-        (("key",), [('$."key"', "ASC")]),
-        (("+key",), [('$."key"', "ASC")]),
-        (("-key",), [('$."key"', "DESC")]),
-        (("key", "subkey"), [('$."key"."subkey"', "ASC")]),
-        (("+key", "subkey"), [('$."key"."subkey"', "ASC")]),
-        (("-key", "subkey"), [('$."key"."subkey"', "DESC")]),
-        (("key", "subkey", 3), [('$."key"."subkey"[3]', "ASC")]),
-        (("+key", "subkey", 3), [('$."key"."subkey"[3]', "ASC")]),
-        (("-key", "subkey", 3), [('$."key"."subkey"[3]', "DESC")]),
+        (("key",), [('$."key"', "ASC", "json")]),
+        (("+key",), [('$."key"', "ASC", "json")]),
+        (("-key",), [('$."key"', "DESC", "json")]),
+        (("key", "subkey"), [('$."key"."subkey"', "ASC", "json")]),
+        (("+key", "subkey"), [('$."key"."subkey"', "ASC", "json")]),
+        (("-key", "subkey"), [('$."key"."subkey"', "DESC", "json")]),
+        (("key", "subkey", 3), [('$."key"."subkey"[3]', "ASC", "json")]),
+        (("+key", "subkey", 3), [('$."key"."subkey"[3]', "ASC", "json")]),
+        (("-key", "subkey", 3), [('$."key"."subkey"[3]', "DESC", "json")]),
         # Type 4
-        (db.Q.key, [('$."key"', "ASC")]),
-        (+db.Q.key, [('$."key"', "ASC")]),
-        (-db.Q.key, [('$."key"', "DESC")]),
-        (db.Q.key.subkey, [('$."key"."subkey"', "ASC")]),
-        (+db.Q.key.subkey, [('$."key"."subkey"', "ASC")]),
-        (-db.Q.key.subkey, [('$."key"."subkey"', "DESC")]),
-        (db.Q.key.subkey[3], [('$."key"."subkey"[3]', "ASC")]),
-        (+db.Q.key.subkey[3], [('$."key"."subkey"[3]', "ASC")]),
-        (-db.Q.key.subkey[3], [('$."key"."subkey"[3]', "DESC")]),
+        (db.Q.key, [('$."key"', "ASC", "json")]),
+        (+db.Q.key, [('$."key"', "ASC", "json")]),
+        (-db.Q.key, [('$."key"', "DESC", "json")]),
+        (db.Q.key.subkey, [('$."key"."subkey"', "ASC", "json")]),
+        (+db.Q.key.subkey, [('$."key"."subkey"', "ASC", "json")]),
+        (-db.Q.key.subkey, [('$."key"."subkey"', "DESC", "json")]),
+        (db.Q.key.subkey[3], [('$."key"."subkey"[3]', "ASC", "json")]),
+        (+db.Q.key.subkey[3], [('$."key"."subkey"[3]', "ASC", "json")]),
+        (-db.Q.key.subkey[3], [('$."key"."subkey"[3]', "DESC", "json")]),
+        (db.Q.rowid_, [("rowid", "ASC", "rowid")]),
+        (+db.Q.rowid_, [("rowid", "ASC", "rowid")]),
+        (-db.Q.rowid_, [("rowid", "DESC", "rowid")]),
         # Special cases
-        ((4,), [("$[4]", "ASC")]),
-        ((-4,), [("$[-4]", "ASC")]),  # Note that this does not reverse direction
-        (db.Q[4], [("$[4]", "ASC")]),
-        (db.Q[-4], [("$[-4]", "ASC")]),
-        (-db.Q[4], [("$[4]", "DESC")]),  # This DOES reverse
-        (-db.Q[-4], [("$[-4]", "DESC")]),  # this DOES reverse
+        ((4,), [("$[4]", "ASC", "json")]),
+        (
+            (-4,),
+            [("$[-4]", "ASC", "json")],
+        ),  # Note that this does not reverse direction
+        (db.Q[4], [("$[4]", "ASC", "json")]),
+        (db.Q[-4], [("$[-4]", "ASC", "json")]),
+        (-db.Q[4], [("$[4]", "DESC", "json")]),  # This DOES reverse
+        (-db.Q[-4], [("$[-4]", "DESC", "json")]),  # this DOES reverse
     ]
 
     for input_value, expected in tests:
@@ -1459,6 +1543,28 @@ def test_build_orderby_pairs():
         core.build_orderby_pairs([tuple()])
     with pytest.raises(ValueError):
         core.build_orderby_pairs(object())
+
+    with pytest.raises(ValueError):
+        core.build_orderby_pairs(Q().key[:])
+
+    with pytest.raises(DissallowedError):
+        db.Q.rowid_ == 1
+
+
+def test_query_rowid_orderby_only():
+    db = JSONLiteDB.memory()
+
+    assert str(db.Q.rowid_) == "Query(ROWID)"
+    assert str((db.Q.key == "val") & (db.Q.other == 2)).startswith("Query(")
+
+    with pytest.raises(DissallowedError):
+        db.Q.rowid_.exists_()
+    with pytest.raises(DissallowedError):
+        db.Q.rowid_.missing_()
+    with pytest.raises(DissallowedError):
+        db.Q.rowid_.empty()
+    with pytest.raises(DissallowedError):
+        db.Q.rowid_.not_empty()
 
 
 def test_split_query():
@@ -1500,6 +1606,27 @@ def test_split_query():
     g = ("a", 1, "b", 2, "c", 3, 4, 5, "six", 7, "eight", 9)
     assert core.split_query(Q().a[1].b[2].c[3, 4][5]["six", 7].eight[9]) == g
 
+    with pytest.raises(ValueError):
+        core.split_query(Q().a[:].b)
+
+
+def test_wildcard_helper_utils():
+    import pytest
+
+    assert core.tokens_to_json_path([]) == "$"
+    assert core.tokens_to_json_path(["a", 2]) == '$."a"[2]'
+    with pytest.raises(ValueError):
+        core.tokens_to_json_path(["a", slice(None), "b"])
+
+    assert core.format_query_tokens(["a", 2, slice(None)]) == "$.a[2][:]"
+    assert (
+        core.json_array_length_expr("data", ["a"])
+        == "JSON_ARRAY_LENGTH(data, '$.\"a\"')"
+    )
+
+    with pytest.raises(ValueError):
+        core._compile_wildcard_exists(["a"], lambda scope_expr, suffix: "1 = 1")
+
 
 def test_Row():
     # There is a slight incompatibility of CPython and PyPy's sqlite3.Row that the
@@ -1517,16 +1644,19 @@ def test_Row():
         return
 
     db = sqlite3.connect(":memory:")
-    db.row_factory = Row
-    row = db.execute("""SELECT 'a val' as a, 'b val' as b""").fetchone()
+    try:
+        db.row_factory = Row
+        row = db.execute("""SELECT 'a val' as a, 'b val' as b""").fetchone()
 
-    assert row.keys() == ["a", "b"]  # not set() to check orderings
-    assert row.todict() == {"a": "a val", "b": "b val"}
-    assert set(row.items()) == {("a", "a val"), ("b", "b val")}
-    assert set(row.values()) == {"a val", "b val"}
-    assert row.get("a") == "a val"
-    assert row.get("c", "c val") == "c val"
-    assert str(row) == "Row({'a': 'a val', 'b': 'b val'})"
+        assert row.keys() == ["a", "b"]  # not set() to check orderings
+        assert row.todict() == {"a": "a val", "b": "b val"}
+        assert set(row.items()) == {("a", "a val"), ("b", "b val")}
+        assert set(row.values()) == {"a val", "b val"}
+        assert row.get("a") == "a val"
+        assert row.get("c", "c val") == "c val"
+        assert str(row) == "Row({'a': 'a val', 'b': 'b val'})"
+    finally:
+        db.close()
 
 
 def test_listify():

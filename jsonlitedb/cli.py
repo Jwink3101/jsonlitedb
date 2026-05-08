@@ -83,8 +83,7 @@ def cli():
     suitable for shell scripting.
     """
     default_table = os.environ.get(CLI_TABLE_ENV) or "items"
-    desc = dedent(
-        f"""
+    desc = dedent(f"""
         Command-line tool for inserting JSON/JSONL into a JSONLiteDB (SQLite) file.
 
         Input is treated as JSON Lines (one JSON value per line). Files ending in
@@ -94,8 +93,7 @@ def cli():
 
         Default table comes from ${CLI_TABLE_ENV} (fallback: 'items').
         Use --table to override for any command.
-        """
-    )
+        """)
 
     parser = argparse.ArgumentParser(
         description=desc, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -123,8 +121,7 @@ def cli():
         title="Commands",
         required=True,
         metavar="COMMAND",
-        description=dedent(
-            """
+        description=dedent("""
             Read-only commands: query, count, dump, indexes, stats
             Write commands: insert, import, add, delete, patch, create-index, drop-index
 
@@ -132,8 +129,7 @@ def cli():
             direct sqlite3 for full manipulation.
 
             Run `%(prog)s <command> -h` for help.
-            """
-        ),
+            """),
     )
 
     def _add_insert_family_parser(command, *, help_text, description, positional_mode):
@@ -157,26 +153,20 @@ def cli():
         cmd_parser.add_argument("dbpath", help="JSONLiteDB file")
 
         if positional_mode == "legacy_files":
-            group_desc = dedent(
-                """
+            group_desc = dedent("""
                 Input sources are processed in fixed order:
                 --json, --file, --stdin, then legacy positional file inputs.
-                """
-            )
+                """)
         elif positional_mode == "json_items":
-            group_desc = dedent(
-                """
+            group_desc = dedent("""
                 Input sources are processed in fixed order:
                 --json, --file, --stdin, then positional JSON_ITEM values.
-                """
-            )
+                """)
         else:
-            group_desc = dedent(
-                """
+            group_desc = dedent("""
                 Input sources are processed in fixed order:
                 --json, --file, --stdin, then positional file inputs.
-                """
-            )
+                """)
 
         input_group = cmd_parser.add_argument_group("Input sources", group_desc)
         input_group.add_argument(
@@ -268,15 +258,12 @@ def cli():
         positional_mode="json_items",
     )
 
-    query_desc = dedent(
-        """
+    query_desc = dedent("""
         Query rows and emit matching JSON Lines.
 
         Filters are limited to equality expressions and are combined with AND.
-        """
-    )
-    query_epilog = dedent(
-        """
+        """)
+    query_epilog = dedent("""
         Examples:
           jsonlitedb query my.db name=George
           jsonlitedb query my.db '$.meta.rank=7' active=true --limit 5
@@ -290,8 +277,7 @@ def cli():
           Use Python `JSONLiteDB.query(...)` for OR/NOT, inequalities, LIKE/GLOB/REGEXP
           (when enabled),
           and other advanced query composition.
-        """
-    )
+        """)
     query = subparser.add_parser(
         "query",
         help="query database and emit JSONL",
@@ -414,13 +400,11 @@ def cli():
     )
     stats.add_argument("dbpath", help="JSONLiteDB file")
 
-    delete_desc = dedent(
-        """
+    delete_desc = dedent("""
         Delete rows matching equality filters.
 
         Safety: an empty filter set is rejected unless --allow-empty is provided.
-        """
-    )
+        """)
     delete = subparser.add_parser(
         "delete",
         help="delete matching rows",
@@ -506,15 +490,13 @@ def cli():
         "patch",
         help="apply JSON Merge Patch to matching rows",
         parents=[global_parent],
-        description=dedent(
-            """
+        description=dedent("""
             Apply a JSON Merge Patch document to matching rows.
 
             Important:
               In JSON Merge Patch, keys set to null are removed.
               This means you cannot set a value to JSON null with this command.
-            """
-        ),
+            """),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     patch.add_argument("dbpath", help="JSONLiteDB file")
@@ -542,18 +524,14 @@ def cli():
 
     if len(sys.argv) == 2 and sys.argv[1] in {"-h", "--help"}:
         parser.print_help()
-        sys.stdout.write(
-            dedent(
-                """
+        sys.stdout.write(dedent("""
 
                 COMMAND (read-only):
                   query, count, dump, indexes, stats
 
                 COMMAND (write):
                   insert, import, add, delete, patch, create-index, drop-index
-                """
-            )
-        )
+                """))
         raise SystemExit(0)
 
     args, extras = parser.parse_known_args()

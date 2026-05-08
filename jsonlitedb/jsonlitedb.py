@@ -18,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 __all__ = [
     "AssignedQueryError",
@@ -502,11 +502,14 @@ class JSONLiteDB:
         4) Query object (no comparison):
            >>> db.Q.key
            >>> -db.Q.key.subkey
+           >>> db.Q.rowid_
 
         Multiple orderings:
-        >>> ["-key1", db.Q.key2, ("-key3", "subkey")]
+        >>> ["-key1", db.Q.key2, ("-key3", "subkey"), db.Q.rowid_]
 
         A leading `-` selects DESC, `+` selects ASC (default).
+        Use `db.Q.rowid_` to sort by the SQLite rowid without treating it as a
+        JSON document key.
         """
         _load = query_kwargs.pop("_load", True)
         _limit = query_kwargs.pop("_limit", None)
@@ -766,12 +769,10 @@ class JSONLiteDB:
             raise ValueError(f"Unallowed aggregate function {function!r}")
 
         path = build_index_paths(path)[0]  # Always just one
-        res = self.execute(
-            f"""
+        res = self.execute(f"""
             SELECT {function}(JSON_EXTRACT({self.table}.data, {sqlite_quote(path)})) 
             AS val FROM {self.table}
-            """
-        )
+            """)
 
         return res.fetchone()["val"]
 
@@ -1218,8 +1219,7 @@ class JSONLiteDB:
         """
         start = start or "$"
         start = build_index_paths(start)[0]  # Always just one
-        res = self.execute(
-            f"""
+        res = self.execute(f"""
             SELECT 
                 each.key, 
                 COUNT(each.key) as count
@@ -1228,8 +1228,7 @@ class JSONLiteDB:
                 JSON_EACH({self.table}.data,{sqlite_quote(start)}) AS each
             GROUP BY each.key
             ORDER BY -count
-            """
-        )
+            """)
         counts = {row["key"]: row["count"] for row in res}
         counts.pop(None, None)  # do not include nothing
         return counts
@@ -1295,13 +1294,11 @@ class JSONLiteDB:
             f"JSON_EXTRACT(data, {sqlite_quote(path)})" for path in paths
         )
         with self:
-            self.execute(
-                f"""
+            self.execute(f"""
                 CREATE {"UNIQUE" if unique else ""} INDEX IF NOT EXISTS {index_name} 
                 ON {self.table}(
                     {quoted_paths}
-                )"""
-            )
+                )""")
 
     def drop_index_by_name(self, name):
         """
@@ -1423,40 +1420,28 @@ class JSONLiteDB:
             logger.debug("DB metadata table missing. Creating schema")
 
         with self:
-            db.execute(
-                dedent(
-                    f"""
+            db.execute(dedent(f"""
                 CREATE TABLE IF NOT EXISTS {self.table}(
                     rowid INTEGER PRIMARY KEY AUTOINCREMENT,
                     data TEXT
-                )"""
-                )
-            )
-            db.execute(
-                dedent(
-                    f"""
+                )"""))
+            db.execute(dedent(f"""
                 CREATE TABLE IF NOT EXISTS {self.table}_kv(
                     key TEXT PRIMARY KEY,
                     val TEXT
-                )"""
-                )
-            )
+                )"""))
             if not DISABLE_METADATA:
                 # 'key' is PRIMARY KEY so it will be ignored if already there.
                 db.execute(
-                    dedent(
-                        f"""
+                    dedent(f"""
                     INSERT OR IGNORE INTO {self.table}_kv VALUES (?,?)
-                    """
-                    ),
+                    """),
                     ("created", datetime.datetime.now().astimezone().isoformat()),
                 )
                 db.execute(
-                    dedent(
-                        f"""
+                    dedent(f"""
                     INSERT OR IGNORE INTO {self.table}_kv VALUES (?,?)
-                    """
-                    ),
+                    """),
                     ("version", f"JSONLiteDB-{__version__}"),
                 )
 
@@ -1514,11 +1499,14 @@ class JSONLiteDB:
             return ""
         pairs = build_orderby_pairs(orderby)
         out = []
-        for path, order in pairs:
-            out.append(
-                " " * 14  # The indent isn't needed but it looks nicer
-                + f"JSON_EXTRACT({self.table}.data, {sqlite_quote(path)}) {order}"
-            )
+        for path, order, kind in pairs:
+            if kind == "rowid":
+                clause = f"{self.table}.rowid {order}"
+            else:
+                clause = (
+                    f"JSON_EXTRACT({self.table}.data, {sqlite_quote(path)}) {order}"
+                )
+            out.append(" " * 14 + clause)  # Indent is cosmetic only.
 
         return "ORDER BY\n" + ",\n".join(out)
 
@@ -1891,6 +1879,9 @@ class Query:
 
     For fluent composition, `and_()` and `or_()` are available as method
     equivalents of `&` and `|`.
+
+    The special pseudo-field `rowid_` is reserved for `_orderby` usage and
+    refers to the SQLite rowid rather than a JSON document key.
     """
 
     def __init__(self):
@@ -1927,11 +1918,22 @@ class Query:
 
     ## Key Builders
     def __getattr__(self, attr):  # Query().key
+        if attr == "rowid_":
+            self._key.append(ORDERBY_ROWID)
+            return self
         self._key.append(attr)
         return self
 
     def __getitem__(self, item):  # Query()['key'] or Query()[ix]
+        # Treat [:] as an array wildcard for existential JSON1 queries.
+        if isinstance(item, slice):
+            if item.start is not None or item.stop is not None or item.step is not None:
+                raise ValueError("Only full slice [:] is supported in query paths")
+            self._key.append(item)
+            return self
         if isinstance(item, (list, tuple)):
+            if any(isinstance(subitem, slice) for subitem in item):
+                raise ValueError("Wildcard slices are only supported as standalone [:]")
             self._key.extend(item)
         else:
             self._key.append(item)
@@ -1955,12 +1957,26 @@ class Query:
                 "Cannot compare queries. For example, change "
                 '"4 <= db.Q.val <= 5" to "(4 <= db.Q.val) & (db.Q.val <= 5)"'
             )
+        if is_rowid_orderby_tokens(self._key):
+            raise DissallowedError(
+                "db.Q.rowid_ is only supported for ORDER BY expressions"
+            )
 
         if sym == "REGEXP" and not regex_enabled():
             raise RegexDisabledError(
                 "REGEXP queries are disabled. Set JSONLITEDB_ENABLE_REGEX=1 "
                 "or jsonlitedb.ENABLE_REGEX = True to opt in."
             )
+
+        if query_has_wildcard(self._key):
+            # Wildcard paths compile to EXISTS(JSON_EACH(...)) instead of a
+            # single JSON_EXTRACT(data, path) comparison.
+            qv = None
+            if val is not None or sym not in {"=", "!="}:
+                qv = randkey()
+                self._qdict[qv] = val
+            self._query = _compile_wildcard_compare(self._key, sym=sym, qv=qv)
+            return self
 
         r = _query_tuple2jsonpath({tuple(self._key): val})  # Will just return one item
         k, v = list(r.items())[0]
@@ -1987,6 +2003,12 @@ class Query:
         """
         if self._query:
             raise DissallowedError("Cannot apply existence test to built query")
+        if is_rowid_orderby_tokens(self._key):
+            raise DissallowedError("db.Q.rowid_ does not support exists_()")
+        if query_has_wildcard(self._key):
+            raise DissallowedError(
+                "Wildcard paths do not support exists_(); compare or use empty()"
+            )
 
         r = _query_tuple2jsonpath({tuple(self._key): None})  # one item
         k = list(r)[0]
@@ -2001,10 +2023,36 @@ class Query:
         """
         if self._query:
             raise DissallowedError("Cannot apply missing test to built query")
+        if is_rowid_orderby_tokens(self._key):
+            raise DissallowedError("db.Q.rowid_ does not support missing_()")
+        if query_has_wildcard(self._key):
+            raise DissallowedError(
+                "Wildcard paths do not support missing_(); compare or use empty()"
+            )
 
         r = _query_tuple2jsonpath({tuple(self._key): None})  # one item
         k = list(r)[0]
         self._query = f"( JSON_TYPE(data, {sqlite_quote(k)}) IS NULL )"
+        return self
+
+    def empty(self):
+        """Match rows where the current path is an empty array."""
+        if self._query:
+            raise DissallowedError("Cannot apply empty() to built query")
+        if is_rowid_orderby_tokens(self._key):
+            raise DissallowedError("db.Q.rowid_ does not support empty()")
+
+        self._query = _compile_array_length_predicate(self._key, comparison="= 0")
+        return self
+
+    def not_empty(self):
+        """Match rows where the current path is a non-empty array."""
+        if self._query:
+            raise DissallowedError("Cannot apply not_empty() to built query")
+        if is_rowid_orderby_tokens(self._key):
+            raise DissallowedError("db.Q.rowid_ does not support not_empty()")
+
+        self._query = _compile_array_length_predicate(self._key, comparison="> 0")
         return self
 
     __lt__ = partialmethod(_compare, sym="<")
@@ -2058,9 +2106,14 @@ class Query:
         if qdict or self._query:
             q = translate(self._query, {k: sqlite_quote(v) for k, v in qdict.items()})
         elif self._key:
-            qdict = _query_tuple2jsonpath({tuple(self._key): None})
-            k = list(qdict)[0]
-            q = f"JSON_EXTRACT(data, {sqlite_quote(k)})"
+            if is_rowid_orderby_tokens(self._key):
+                q = "ROWID"
+            if query_has_wildcard(self._key):
+                q = f"PATH({format_query_tokens(self._key)})"
+            elif not is_rowid_orderby_tokens(self._key):
+                qdict = _query_tuple2jsonpath({tuple(self._key): None})
+                k = list(qdict)[0]
+                q = f"JSON_EXTRACT(data, {sqlite_quote(k)})"
         else:
             q = ""
 
@@ -2088,6 +2141,12 @@ else:
 
 
 _about_obj = namedtuple("About", ("created", "version"))
+ORDERBY_ROWID = object()
+
+
+def is_rowid_orderby_tokens(tokens):
+    """Return whether tokens represent the `_orderby`-only `db.Q.rowid_` path."""
+    return list(tokens) == [ORDERBY_ROWID]
 
 
 def _query_tuple2jsonpath(*args, **kwargs):
@@ -2177,6 +2236,8 @@ def build_index_paths(*args):
                     "Example: 'db.Q.key' is acceptable "
                     "but 'db.Q.key == val' is NOT"
                 )
+            if query_has_wildcard(arg._key):
+                raise ValueError("Wildcard paths are not supported for index creation")
             arg = tuple(arg._key)
         arg = _query_tuple2jsonpath(arg)  # Now it is a len-1 dict. Just use the key
         path = list(arg)[0]
@@ -2189,7 +2250,10 @@ def build_index_paths(*args):
 
 def build_orderby_pairs(orderby):
     """
-    Normalize an order-by specification into (json_path, order) pairs.
+    Normalize an order-by specification into `(path_or_field, order, kind)` tuples.
+
+    JSON document keys use kind `"json"` and the SQLite rowid pseudo-field uses
+    kind `"rowid"`.
     """
     if not orderby:
         return ""
@@ -2209,7 +2273,12 @@ def build_orderby_pairs(orderby):
                     "Cannot index an assigned query. Example: 'db.Q.key' is acceptable "
                     "but 'db.Q.key == val' is NOT"
                 )
+            if query_has_wildcard(item._key):
+                raise ValueError("Wildcard paths are not supported for ORDER BY")
             order = item._asc_or_desc or order  # default to ASC
+            if is_rowid_orderby_tokens(item._key):
+                orders.append(("rowid", order, "rowid"))
+                continue
             item = tuple(item._key)
 
         if isinstance(item, str):  # type 1 or 2
@@ -2221,7 +2290,7 @@ def build_orderby_pairs(orderby):
 
             if not item.startswith("$"):
                 item = f'$."{item}"'
-            orders.append((item, order))
+            orders.append((item, order, "json"))
 
         elif isinstance(item, tuple):  # type 3
             if len(item) == 0:
@@ -2245,7 +2314,7 @@ def build_orderby_pairs(orderby):
                 sitem, *ints = itemgroup
                 newitem.append(f'"{sitem}"' + "".join(f"[{i:d}]" for i in ints))
 
-            orders.append((".".join(newitem), order))
+            orders.append((".".join(newitem), order, "json"))
         else:
             raise ValueError("Unrecognized item for ORDER BY")
     return orders
@@ -2259,6 +2328,8 @@ def split_query(path):
     """
     if not path:
         return tuple()
+    if isinstance(path, Query) and query_has_wildcard(path._key):
+        raise ValueError("Wildcard paths cannot be converted to a concrete JSON path")
     # Combine and then split it to be certain of the format
     path = build_index_paths(path)[0]  # returns full path
 
@@ -2281,6 +2352,123 @@ def split_query(path):
             new_path.append(ix)
 
     return tuple(new_path)
+
+
+def query_has_wildcard(tokens):
+    """Return whether a query token sequence includes a wildcard slice."""
+    return any(isinstance(token, slice) for token in tokens)
+
+
+def format_query_tokens(tokens):
+    """Render internal query tokens in a user-readable path format."""
+    out = ["$"]
+    for token in tokens:
+        if isinstance(token, str):
+            out.append(f".{token}")
+        elif isinstance(token, int):
+            out.append(f"[{token:d}]")
+        elif isinstance(token, slice):
+            out.append("[:]")
+        else:  # pragma: no cover
+            raise TypeError(f"Unsupported query token: {token!r}")
+    return "".join(out)
+
+
+def tokens_to_json_path(tokens):
+    """Convert concrete query tokens into a JSON path string."""
+    if query_has_wildcard(tokens):
+        raise ValueError("Wildcard paths cannot be converted to a concrete JSON path")
+    return build_index_paths(tuple(tokens))[0] if tokens else "$"
+
+
+def split_query_tokens_on_wildcard(tokens):
+    """Split query tokens into concrete segments separated by wildcard slices."""
+    parts = []
+    current = []
+    wildcard_count = 0
+    for token in tokens:
+        if isinstance(token, slice):
+            wildcard_count += 1
+            parts.append(current)
+            current = []
+        else:
+            current.append(token)
+    parts.append(current)
+    return parts, wildcard_count
+
+
+def json_extract_expr(scope_expr, tokens):
+    """Build a JSON_EXTRACT expression for a scope and concrete token suffix."""
+    if not tokens:
+        return scope_expr
+    path = tokens_to_json_path(tokens)
+    return f"JSON_EXTRACT({scope_expr}, {sqlite_quote(path)})"
+
+
+def json_type_expr(scope_expr, tokens):
+    """Build a JSON_TYPE expression for a scope and concrete token suffix."""
+    path = tokens_to_json_path(tokens)
+    return f"JSON_TYPE({scope_expr}, {sqlite_quote(path)})"
+
+
+def json_array_length_expr(scope_expr, tokens):
+    """Build a JSON_ARRAY_LENGTH expression for a scope and concrete token suffix."""
+    path = tokens_to_json_path(tokens)
+    return f"JSON_ARRAY_LENGTH({scope_expr}, {sqlite_quote(path)})"
+
+
+def _wildcard_compare_clause(expr, sym, qv):
+    if qv is None and sym in {"=", "!="}:
+        return f"{expr} IS {'NOT ' if sym == '!=' else ''}NULL"
+    return f"{expr} {sym} {qv}"
+
+
+def _compile_wildcard_exists(tokens, predicate_builder):
+    """Compile a wildcard token path into nested EXISTS(JSON_EACH(...)) SQL."""
+    parts, wildcard_count = split_query_tokens_on_wildcard(tokens)
+    if wildcard_count == 0:
+        raise ValueError("Wildcard compiler requires at least one [:] segment")
+
+    predicate = predicate_builder(f"jldb_each_{wildcard_count - 1}.value", parts[-1])
+    for idx in range(wildcard_count - 1, -1, -1):
+        scope_expr = "data" if idx == 0 else f"jldb_each_{idx - 1}.value"
+        path_tokens = parts[idx]
+        array_type = f"{json_type_expr(scope_expr, path_tokens)} = 'array'"
+        path = tokens_to_json_path(path_tokens)
+        # Each wildcard adds one more JSON_EACH scope. The innermost predicate
+        # is built first, then wrapped outward for nested wildcards.
+        predicate = f"""EXISTS (
+            SELECT 1
+            FROM JSON_EACH({scope_expr}, {sqlite_quote(path)}) AS jldb_each_{idx}
+            WHERE {array_type} AND {predicate}
+        )"""
+    return f"( {predicate} )"
+
+
+def _compile_wildcard_compare(tokens, *, sym, qv):
+    return _compile_wildcard_exists(
+        tokens,
+        lambda scope_expr, suffix: _wildcard_compare_clause(
+            json_extract_expr(scope_expr, suffix), sym, qv
+        ),
+    )
+
+
+def _compile_array_length_predicate(tokens, *, comparison):
+    if query_has_wildcard(tokens):
+        return _compile_wildcard_exists(
+            tokens,
+            lambda scope_expr, suffix: (
+                f"{json_type_expr(scope_expr, suffix)} = 'array' "
+                f"AND {json_array_length_expr(scope_expr, suffix)} {comparison}"
+            ),
+        )
+
+    path = tokens_to_json_path(tokens)
+    return (
+        f"( JSON_TYPE(data, {sqlite_quote(path)}) = 'array' "
+        f"AND JSON_ARRAY_LENGTH(data, {sqlite_quote(path)}) {comparison} )"
+    )
 
 
 ###################################################
@@ -2535,8 +2723,11 @@ def sqlite_quote(text):
     quoted = io.StringIO()
 
     tempdb = sqlite3.connect(":memory:")
-    tempdb.set_trace_callback(quoted.write)
-    tempdb.execute("SELECT\n?", (text,))
+    try:
+        tempdb.set_trace_callback(quoted.write)
+        tempdb.execute("SELECT\n?", (text,))
+    finally:
+        tempdb.close()
 
     quoted = "\n".join(quoted.getvalue().splitlines()[1:])  # Allow for new lines
     return quoted
