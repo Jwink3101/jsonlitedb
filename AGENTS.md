@@ -22,8 +22,8 @@
 - Development happens in this private repo.
 - Use `copy_to_github.py` to sync tracked files to the public GitHub repo before publishing.
 - The sync script runs `build_help.py`, mirrors tracked files via `rsync`, and commits in the public repo.
-- `readme.md` includes executed demo output injected between `<!--- BEGIN AUTO GENERATED -->` and `<!--- END AUTO GENERATED -->`; that block is overwritten on each run. To modify that text, you must edit `Demo/Basic Usage.ipynb` which is a Jupyter Notebook file.
-- `build_help.py` executes all tracked `.ipynb` files, but only `Demo/Basic Usage.ipynb` is inserted into the README.
+- `readme.md` includes executed demo output injected between `<!--- BEGIN AUTO GENERATED -->` and `<!--- END AUTO GENERATED -->`; that block is overwritten on each run. To modify that text, edit `Demo/Basic Usage.md`.
+- `build_help.py` runs `md-demo` on `Demo/Basic Usage.md` and inserts a cleaned copy into the README.
 
 ## Coding Style & Naming Conventions
 

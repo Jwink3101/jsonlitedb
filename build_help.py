@@ -7,97 +7,26 @@ import subprocess
 import sys
 from pathlib import Path
 
-import nbformat
-from jupyter_client.kernelspec import NoSuchKernel
-from nbconvert import MarkdownExporter
-from nbconvert.preprocessors import ExecutePreprocessor
-
-import jsonlitedb
-
 md = ["<!--- Auto Generated -->", "<!--- DO NOT MODIFY. WILL NOT BE SAVED -->"]
 
 os.chdir(os.path.dirname(__file__))
 
-
-def notebook_kernel_name(nb):
-    kernelspec = nb.metadata.get("kernelspec", {})
-    if kernelspec.get("name"):
-        return kernelspec["name"]
-    return "python"
+DEMO_DIR = Path("Demo")
+README_DEMO = DEMO_DIR / "Basic Usage.md"
 
 
-def run_replace_convert(file):
-    # Load the Jupyter notebook
-    with open(file, "r") as fp:
-        nb = nbformat.read(fp, as_version=4)
-
-    # Execute
-    kernel_name = notebook_kernel_name(nb)
-
-    pwd0 = os.getcwd()
-
-    try:
-        os.chdir(Path(file).resolve().parent)
-        executer = ExecutePreprocessor(timeout=600, kernel_name=kernel_name)
-        executer.preprocess(nb, {"metadata": {"path": "./"}})
-    except NoSuchKernel:
-        executer = ExecutePreprocessor(timeout=600, kernel_name="python")
-        executer.preprocess(nb, {"metadata": {"path": "./"}})
-    finally:
-        os.chdir(pwd0)
-
-    # clean
-    nb.metadata.get("language_info", {}).pop("version", None)
-    for cell in nb.cells:
-        nb.metadata.pop("signature", None)
-        #         if 'execution_count' in cell:
-        #            cell['execution_count'] = None
-        #
-        #         if 'outputs' in cell and 'execution_count' in cell['outputs']:
-        #             cell['outputs']['execution_count'] = None
-
-        # if 'prompt_number' in cell:
-        #    cell['prompt_number'] = None
-
-        if "metadata" in cell:
-            cell["metadata"].pop("execution", None)
-
-    # Save the executed notebook in place
-    with open(file + ".swp", "w") as fp:
-        nbformat.write(nb, fp)
-    shutil.move(file + ".swp", file)
-
-    # Create a Markdown exporter
-    exporter = MarkdownExporter()
-
-    # Convert the notebook to Markdown
-    body, resources = exporter.from_notebook_node(nb)
-
-    # This is a hack since I can't seem to get the exporter to properly use
-    # a custom template. I will fix this eventually
-    out = []
-    body = iter(body.splitlines())
-    for line in body:
-        out.append(line)
-        if line.startswith("```python"):
-            for line in body:
-                if line.startswith("```"):
-                    out.append(line)
-                    break
-                else:
-                    if "import init_demo_mode" in line:
-                        continue
-                    out.append(">>> " + line)
-    body = "\n".join(out)
-
-    return body
+def run_md_demo(file):
+    subprocess.run(["md-demo", str(file)], check=True)
 
 
-cmd = ["git", "ls-files", "*.ipynb"]
-ipynb_files = subprocess.check_output(cmd).decode().strip().split("\n")
-ipynbs = {ipynb_file: run_replace_convert(ipynb_file) for ipynb_file in ipynb_files}
+def read_readme_demo(file):
+    return file.read_text().strip()
 
-body = ipynbs["Demo/Basic Usage.ipynb"]
+
+for demo_file in sorted(DEMO_DIR.glob("*.md")):
+    run_md_demo(demo_file)
+
+body = read_readme_demo(README_DEMO)
 md.append(body)
 
 with open("readme.md", "r") as rmin, open(".readme.md.swp", "wt") as rmout:

@@ -26,10 +26,7 @@ from jsonlitedb import (
     cli,
 )
 from jsonlitedb import jsonlitedb as core
-from jsonlitedb import (
-    parse_cli_filter_value,
-    sqlite_quote,
-)
+from jsonlitedb import parse_cli_filter_value, sqlite_quote
 
 
 def test_JSONLiteDB_general():
@@ -1083,6 +1080,18 @@ def test_Query():
         core.translate(q._query, q._qdict) == "( JSON_EXTRACT(data, '$.\"a\"') < 10 )"
     )
 
+    q = Query().a.lower_() == "ten"
+    assert (
+        core.translate(q._query, q._qdict)
+        == "( LOWER(JSON_EXTRACT(data, '$.\"a\"')) = ten )"
+    )
+
+    q = Query().a.length_() >= 3
+    assert (
+        core.translate(q._query, q._qdict)
+        == "( LENGTH(JSON_EXTRACT(data, '$.\"a\"')) >= 3 )"
+    )
+
     q = Query().a.exists_()
     assert (
         core.translate(q._query, q._qdict)
@@ -1098,9 +1107,17 @@ def test_Query():
     with pytest.raises(DissallowedError):
         (Query().a == 1).missing_()
     with pytest.raises(DissallowedError):
+        (Query().a == 1).lower_()
+    with pytest.raises(DissallowedError):
+        (Query().a == 1).length_()
+    with pytest.raises(DissallowedError):
         Query().a[:].exists_()
     with pytest.raises(DissallowedError):
         Query().a[:].missing_()
+    with pytest.raises(DissallowedError):
+        Query().a[:].lower_()
+    with pytest.raises(DissallowedError):
+        Query().a[:].length_()
     with pytest.raises(DissallowedError):
         (Query().a == 1).empty()
     with pytest.raises(DissallowedError):
@@ -1182,6 +1199,18 @@ def test_Query():
     assert q1._key == q1_key and q1._asc_or_desc is None
     assert q2._key == q1_key and q2._asc_or_desc == "DESC"
     assert q3._key == q1_key and q3._asc_or_desc == "ASC"
+    assert Query().order.key.lower_()._transforms == [
+        core.SQLTransform("LOWER", (core.QUERY_VALUE,))
+    ]
+    assert (-Query().order.key.lower_())._transforms == [
+        core.SQLTransform("LOWER", (core.QUERY_VALUE,))
+    ]
+    assert Query().order.key.length_()._transforms == [
+        core.SQLTransform("LENGTH", (core.QUERY_VALUE,))
+    ]
+    assert (-Query().order.key.length_())._transforms == [
+        core.SQLTransform("LENGTH", (core.QUERY_VALUE,))
+    ]
 
     q = (Query().a < "A") | (Query().b < "B")
     assert (
@@ -1201,6 +1230,10 @@ def test_Query():
 
     assert repr(Query().key) == "Query(JSON_EXTRACT(data, '$.\"key\"'))"
     assert repr(Query().key.subkey) == 'Query(JSON_EXTRACT(data, \'$."key"."subkey"\'))'
+    assert repr(Query().key.lower_()) == "Query(LOWER(JSON_EXTRACT(data, '$.\"key\"')))"
+    assert (
+        repr(Query().key.length_()) == "Query(LENGTH(JSON_EXTRACT(data, '$.\"key\"')))"
+    )
     assert repr(Query()[2].key[:]) == "Query(PATH($[2].key[:]))"
     assert repr(Query().key[:]) == "Query(PATH($.key[:]))"
     assert repr(Query()) == "Query()"
@@ -1339,6 +1372,33 @@ def test_build_index_paths():
         core.build_index_paths(Query().key[:])
 
 
+def test_build_index_expressions():
+    import pytest
+
+    db = JSONLiteDB.memory()
+
+    assert core.build_index_expressions("key") == ["JSON_EXTRACT(data, '$.\"key\"')"]
+    assert core.build_index_expressions(db.Q.key.lower_()) == [
+        "LOWER(JSON_EXTRACT(data, '$.\"key\"'))"
+    ]
+    assert core.build_index_expressions(db.Q.key.length_()) == [
+        "LENGTH(JSON_EXTRACT(data, '$.\"key\"'))"
+    ]
+
+    with pytest.raises(AssignedQueryError):
+        core.build_index_expressions(Query().key == "val")
+
+    assert core.build_index_signatures("key") == ['$."key"']
+    assert core.build_index_signatures(db.Q.key.lower_()) == [
+        "LOWER(JSON_EXTRACT(data, '$.\"key\"'))"
+    ]
+    assert core.build_index_signatures(db.Q.key.length_()) == [
+        "LENGTH(JSON_EXTRACT(data, '$.\"key\"'))"
+    ]
+    with pytest.raises(AssignedQueryError):
+        core.build_index_signatures((Query().key.lower_() == "val"))
+
+
 def test_query2sql():
     qstr, qvals = JSONLiteDB._query2sql(key="val")
     keys = re.findall(r":jldb_[0-9a-f]+", qstr)
@@ -1370,6 +1430,99 @@ def test_query2sql():
         "val4",
         "otherval4",
     ]
+
+
+def test_render_query():
+    db = JSONLiteDB(":memory:", table="mytable")
+    db.insertmany(
+        [
+            {"first": "John", "born": 1940},
+            {"first": "George", "born": 1943},
+            {"first": "George", "born": 1926},
+        ]
+    )
+
+    sql, filler = db.render_query(first="George", _orderby="born", _limit=1)
+    keys = re.findall(r":jldb_[0-9a-f]+", sql)
+
+    assert len(keys) == 1
+    assert isinstance(filler, dict)
+    assert filler == {keys[0].removeprefix(":"): "George"}
+    normalized_sql = re.sub(r"\s+", " ", re.sub(r":jldb_[0-9a-f]+", "?", sql))
+    assert normalized_sql.strip() == (
+        """SELECT rowid, data FROM mytable """
+        """WHERE ( JSON_EXTRACT(data, '$."first"') = ? ) """
+        """ORDER BY JSON_EXTRACT(mytable.data, '$."born"') ASC LIMIT 1"""
+    )
+    assert [json.loads(row["data"]) for row in db.execute(sql, filler)] == [
+        {"first": "George", "born": 1926}
+    ]
+    assert list(db.query(first="George", _orderby="born", _limit=1)) == [
+        {"first": "George", "born": 1926}
+    ]
+
+
+def test_render_query_accepts_load_without_changing_sql():
+    db = JSONLiteDB(":memory:")
+
+    sql, filler = db.render_query(db.Q.name.exists_(), _load=False)
+    sql_without_load, filler_without_load = db.render_query(db.Q.name.exists_())
+
+    assert filler == {}
+    assert filler_without_load == filler
+    assert sql_without_load == sql
+    assert "JSON_TYPE(data, '$.\"name\"') IS NOT NULL" in sql
+    assert "_load" not in sql
+
+
+def test_render_query_rejects_tuple_of_query_orderings():
+    db = JSONLiteDB(":memory:")
+
+    with pytest.raises(ValueError, match="Use a list for multiple Query orderings"):
+        db.render_query(
+            (db.Q.kids[:].first == "Jane").or_(db.Q.age < 38),
+            _orderby=(-db.Q.age, db.Q.last, db.Q.first),
+        )
+
+    sql, filler = db.render_query(
+        (db.Q.kids[:].first == "Jane").or_(db.Q.age < 38),
+        _orderby=[-db.Q.age, db.Q.last, db.Q.first],
+    )
+    assert isinstance(filler, dict)
+    assert "Query(" not in sql
+    assert """JSON_EXTRACT(items.data, '$."age"') DESC""" in sql
+    assert """JSON_EXTRACT(items.data, '$."last"') ASC""" in sql
+    assert """JSON_EXTRACT(items.data, '$."first"') ASC""" in sql
+
+
+def test_render_query_formats_wildcard_exists():
+    db = JSONLiteDB(":memory:")
+
+    sql, filler = db.render_query(
+        (db.Q.kids[:].first == "Jane").or_(db.Q.age < 38),
+        _orderby=[-db.Q.age, db.Q.last, db.Q.first],
+    )
+
+    assert isinstance(filler, dict)
+    assert "Query(" not in sql
+    assert "( ( EXISTS" not in sql
+    assert "WHERE JSON_TYPE" not in sql
+    assert re.sub(r":jldb_[0-9a-f]+", "?", sql) == """
+            SELECT rowid, data FROM items 
+            WHERE
+                ( EXISTS (
+                    SELECT 1
+                    FROM JSON_EACH(data, '$."kids"') AS jldb_each_0
+                    WHERE
+                        JSON_TYPE(data, '$."kids"') = 'array'
+                        AND JSON_EXTRACT(jldb_each_0.value, '$."first"') = ?
+                ) OR ( JSON_EXTRACT(data, '$."age"') < ? ) )
+            ORDER BY
+              JSON_EXTRACT(items.data, '$."age"') DESC,
+              JSON_EXTRACT(items.data, '$."last"') ASC,
+              JSON_EXTRACT(items.data, '$."first"') ASC
+            
+            """
 
 
 def test_query_placeholder_token_in_path():
@@ -1534,6 +1687,34 @@ def test_build_orderby_pairs():
     for input_value, expected in tests:
         assert core.build_orderby_pairs(input_value) == expected
 
+    pairs = core.build_orderby_pairs(db.Q.key.lower_())
+    assert len(pairs) == 1
+    item, order, kind = pairs[0]
+    assert order == "ASC"
+    assert kind == "query"
+    assert item._render_path_sql() == "LOWER(JSON_EXTRACT(data, '$.\"key\"'))"
+
+    pairs = core.build_orderby_pairs(-db.Q.key.lower_())
+    assert len(pairs) == 1
+    item, order, kind = pairs[0]
+    assert order == "DESC"
+    assert kind == "query"
+    assert item._render_path_sql() == "LOWER(JSON_EXTRACT(data, '$.\"key\"'))"
+
+    pairs = core.build_orderby_pairs(db.Q.key.length_())
+    assert len(pairs) == 1
+    item, order, kind = pairs[0]
+    assert order == "ASC"
+    assert kind == "query"
+    assert item._render_path_sql() == "LENGTH(JSON_EXTRACT(data, '$.\"key\"'))"
+
+    pairs = core.build_orderby_pairs(-db.Q.key.length_())
+    assert len(pairs) == 1
+    item, order, kind = pairs[0]
+    assert order == "DESC"
+    assert kind == "query"
+    assert item._render_path_sql() == "LENGTH(JSON_EXTRACT(data, '$.\"key\"'))"
+
     # Catch edge cases
     assert core.build_orderby_pairs(None) == ""
 
@@ -1543,6 +1724,14 @@ def test_build_orderby_pairs():
         core.build_orderby_pairs([tuple()])
     with pytest.raises(ValueError):
         core.build_orderby_pairs(object())
+
+    with pytest.raises(ValueError, match="Use a list for multiple Query orderings"):
+        core.build_orderby_pairs((-db.Q.age, db.Q.last, db.Q.first))
+    assert core.build_orderby_pairs([-db.Q.age, db.Q.last, db.Q.first]) == [
+        ('$."age"', "DESC", "json"),
+        ('$."last"', "ASC", "json"),
+        ('$."first"', "ASC", "json"),
+    ]
 
     with pytest.raises(ValueError):
         core.build_orderby_pairs(Q().key[:])
@@ -1565,6 +1754,239 @@ def test_query_rowid_orderby_only():
         db.Q.rowid_.empty()
     with pytest.raises(DissallowedError):
         db.Q.rowid_.not_empty()
+    with pytest.raises(DissallowedError):
+        db.Q.rowid_.lower_()
+    with pytest.raises(DissallowedError):
+        db.Q.rowid_.length_()
+
+
+def test_query_lower_orderby_and_index():
+    db = JSONLiteDB.memory()
+    db.insert(
+        {"name": "beta"},
+        {"name": "Alpha"},
+        {"name": "ALPHA"},
+        {"name": None},
+    )
+
+    assert db.query(db.Q.name.lower_() == "alpha").all() == [
+        {"name": "Alpha"},
+        {"name": "ALPHA"},
+    ]
+    assert db.query(db.Q.name.lower_() != None).all() == [
+        {"name": "beta"},
+        {"name": "Alpha"},
+        {"name": "ALPHA"},
+    ]
+    assert db.query(db.Q.name.lower_() % "alp%").all() == [
+        {"name": "Alpha"},
+        {"name": "ALPHA"},
+    ]
+    assert db.query(db.Q.name.lower_() * "alp*").all() == [
+        {"name": "Alpha"},
+        {"name": "ALPHA"},
+    ]
+    assert db.query(_orderby=db.Q.name.lower_()).all() == [
+        {"name": None},
+        {"name": "Alpha"},
+        {"name": "ALPHA"},
+        {"name": "beta"},
+    ]
+    assert db.query(_orderby=-db.Q.name.lower_()).all() == [
+        {"name": "beta"},
+        {"name": "Alpha"},
+        {"name": "ALPHA"},
+        {"name": None},
+    ]
+
+    db.create_index(db.Q.name.lower_())
+    index_name = next(iter(db.indexes))
+    assert db.indexes == {index_name: ['LOWER($."name")']}
+    assert db.explain_query(db.Q.name.lower_() == "alpha")[0]["detail"].startswith(
+        "SEARCH items USING INDEX"
+    )
+    db.drop_index(db.Q.name.lower_())
+    assert not db.indexes
+
+
+def test_query_length_orderby_and_index():
+    db = JSONLiteDB.memory()
+    db.insert(
+        {"name": "beta"},
+        {"name": "Al"},
+        {"name": "ALPHA"},
+        {"name": None},
+    )
+
+    assert db.query(db.Q.name.length_() >= 4).all() == [
+        {"name": "beta"},
+        {"name": "ALPHA"},
+    ]
+    assert db.query(db.Q.name.length_() == 2).all() == [
+        {"name": "Al"},
+    ]
+    assert db.query(_orderby=db.Q.name.length_()).all() == [
+        {"name": None},
+        {"name": "Al"},
+        {"name": "beta"},
+        {"name": "ALPHA"},
+    ]
+    assert db.query(_orderby=-db.Q.name.length_()).all() == [
+        {"name": "ALPHA"},
+        {"name": "beta"},
+        {"name": "Al"},
+        {"name": None},
+    ]
+
+    db.create_index(db.Q.name.length_())
+    index_name = next(iter(db.indexes))
+    assert db.indexes == {index_name: ['LENGTH($."name")']}
+    assert db.explain_query(db.Q.name.length_() >= 4)[0]["detail"].startswith(
+        "SEARCH items USING INDEX"
+    )
+    db.drop_index(db.Q.name.length_())
+    assert not db.indexes
+
+
+def test_query_wrap_filter_orderby_index_and_nesting():
+    db = JSONLiteDB.memory()
+    db.insert(
+        {"name": " beta ", "created": "2025-01-02 03:04:05"},
+        {"name": "Alpha", "created": "2024-06-01 12:00:00"},
+        {"name": " gamma", "created": "2026-03-04 05:06:07"},
+    )
+
+    cutoff = 1735689600
+    assert db.query(db.Q.created.wrap_("unixepoch") >= cutoff).all() == [
+        {"name": " beta ", "created": "2025-01-02 03:04:05"},
+        {"name": " gamma", "created": "2026-03-04 05:06:07"},
+    ]
+    assert db.query(
+        db.Q.created.wrap_("strftime", "%Y", db.Q.VALUE_) == "2025"
+    ).one() == {"name": " beta ", "created": "2025-01-02 03:04:05"}
+    assert db.query(_orderby=db.Q.created.wrap_("unixepoch")).all() == [
+        {"name": "Alpha", "created": "2024-06-01 12:00:00"},
+        {"name": " beta ", "created": "2025-01-02 03:04:05"},
+        {"name": " gamma", "created": "2026-03-04 05:06:07"},
+    ]
+    assert db.query(_orderby=-db.Q.name.wrap_("trim").lower_()).all() == [
+        {"name": " gamma", "created": "2026-03-04 05:06:07"},
+        {"name": " beta ", "created": "2025-01-02 03:04:05"},
+        {"name": "Alpha", "created": "2024-06-01 12:00:00"},
+    ]
+
+    wrapped = db.Q.created.wrap_("substr", 1, 7)
+    assert wrapped._render_path_sql() == (
+        """SUBSTR(JSON_EXTRACT(data, '$."created"'), 1, 7)"""
+    )
+    db.create_index(wrapped)
+    index_name = next(iter(db.indexes))
+    assert db.indexes == {index_name: ['SUBSTR($."created", 1, 7)']}
+    assert db.explain_query(wrapped == "2025-01")[0]["detail"].startswith(
+        "SEARCH items USING INDEX"
+    )
+    db.drop_index(db.Q.created.wrap_("substr", 1, 7))
+    assert not db.indexes
+
+
+def test_query_wrap_guards_and_value_key():
+    assert Query().VALUE_ is Query.VALUE_
+    assert Query()["VALUE_"]._render_path_sql() == (
+        """JSON_EXTRACT(data, '$."VALUE_"')"""
+    )
+    assert Query().created.wrap_(
+        "printf", "value='%s'", Query.VALUE_
+    )._render_path_sql() == (
+        """PRINTF('value=''%s''', JSON_EXTRACT(data, '$."created"'))"""
+    )
+
+    with pytest.raises(DissallowedError):
+        (Query().created == "2025-01-01").wrap_("unixepoch")
+    with pytest.raises(DissallowedError):
+        Query().created[:].wrap_("length")
+    with pytest.raises(DissallowedError):
+        Query().rowid_.wrap_("abs")
+    with pytest.raises(ValueError, match="Invalid SQL function"):
+        Query().created.wrap_("unixepoch); DROP TABLE items; --")
+    with pytest.raises(ValueError, match="at most once"):
+        Query().created.wrap_("printf", Query.VALUE_, Query.VALUE_)
+    with pytest.raises(ValueError, match="literal values"):
+        Query().created.wrap_("max", Query().updated)
+
+
+def test_query_wrap_literal_arguments_and_value_positions():
+    assert Query().value.wrap_("coalesce", None)._render_path_sql() == (
+        """COALESCE(JSON_EXTRACT(data, '$."value"'), NULL)"""
+    )
+    assert Query().value.wrap_("round", 2)._render_path_sql() == (
+        """ROUND(JSON_EXTRACT(data, '$."value"'), 2)"""
+    )
+    assert Query().value.wrap_("printf", b"\x01")._render_path_sql() == (
+        """PRINTF(JSON_EXTRACT(data, '$."value"'), x'01')"""
+    )
+    assert Query().value.wrap_("printf", Query.VALUE_, "suffix")._render_path_sql() == (
+        """PRINTF(JSON_EXTRACT(data, '$."value"'), 'suffix')"""
+    )
+    assert Query().value.wrap_(
+        "printf", "prefix", Query.VALUE_, "suffix"
+    )._render_path_sql() == (
+        """PRINTF('prefix', JSON_EXTRACT(data, '$."value"'), 'suffix')"""
+    )
+    assert Query().value.wrap_("printf", "prefix", Query.VALUE_)._render_path_sql() == (
+        """PRINTF('prefix', JSON_EXTRACT(data, '$."value"'))"""
+    )
+
+
+def test_query_wrap_leaves_function_validation_to_sqlite():
+    db = JSONLiteDB.memory()
+    db.insert({"value": "abc"})
+
+    with pytest.raises(sqlite3.OperationalError, match="no such function"):
+        db.query(db.Q.value.wrap_("function_does_not_exist") == "abc").all()
+    with pytest.raises(sqlite3.OperationalError, match="wrong number of arguments"):
+        db.query(db.Q.value.wrap_("length", "extra") == 3).all()
+
+
+def test_parse_index_expressions():
+    assert core.parse_index_expressions(None) is None
+    assert core.parse_index_expressions("""CREATE INDEX ix ON items(
+            JSON_EXTRACT(data, '$."name"'),
+            LOWER(JSON_EXTRACT(data, '$."email"')),
+            LENGTH(JSON_EXTRACT(data, '$."role"'))
+        )""") == ['$."name"', 'LOWER($."email")', 'LENGTH($."role")']
+    assert core.parse_index_expressions("""CREATE INDEX ix ON items(
+        STRFTIME('%Y-%m', JSON_EXTRACT(data, '$."created"'), 'utc'),
+        JSON_EXTRACT(data, '$."name"')
+    )""") == ["STRFTIME('%Y-%m', $.\"created\", 'utc')", '$."name"']
+    assert (
+        core.parse_index_expressions("""CREATE INDEX ix ON items(
+        LOWER(TRIM(JSON_EXTRACT(data, '$."name"'), ' ,()')),
+        PRINTF('value=(%s, %s)', JSON_EXTRACT(data, '$."first"'), 'literal')
+    )""")
+        == [
+            """LOWER(TRIM($."name", ' ,()'))""",
+            """PRINTF('value=(%s, %s)', $."first", 'literal')""",
+        ]
+    )
+    assert (
+        core.parse_index_expressions("CREATE INDEX ix ON items(other_column)") is None
+    )
+
+
+def test_query_render_path_sql_guards():
+    assert Query().rowid_._render_path_sql() == "ROWID"
+
+    q = Query().rowid_
+    q._transforms.append("LOWER")
+    with pytest.raises(DissallowedError):
+        q._render_path_sql()
+
+    q = Query().rowid_
+    q._transforms.append("LENGTH")
+    with pytest.raises(DissallowedError):
+        q._render_path_sql()
+    with pytest.raises(DissallowedError):
+        Query().items[:]._render_path_sql()
 
 
 def test_split_query():
@@ -1623,6 +2045,7 @@ def test_wildcard_helper_utils():
         core.json_array_length_expr("data", ["a"])
         == "JSON_ARRAY_LENGTH(data, '$.\"a\"')"
     )
+    assert core._prefix_sql_lines("        AND ", "", 12) == "        AND"
 
     with pytest.raises(ValueError):
         core._compile_wildcard_exists(["a"], lambda scope_expr, suffix: "1 = 1")

@@ -18,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 __all__ = [
     "AssignedQueryError",
@@ -478,6 +478,16 @@ class JSONLiteDB:
         - LIKE:  `db.Q.key % "pat%tern"`
         - GLOB:  `db.Q.key * "glob*pattern"`
         - REGEXP: `db.Q.key @ "regex.*"` (Python `re`, opt-in only)
+        - LOWER transform: `db.Q.key.lower_() == "value"`
+          Also works with LIKE/GLOB: `db.Q.key.lower_() % "pat%tern"`
+          and `db.Q.key.lower_() * "glob*pattern"`
+        - LENGTH transform: `db.Q.key.length_() >= 3`
+        - General SQLite scalar function:
+          `db.Q.created.wrap_("unixepoch") >= cutoff`
+        - Function arguments follow the extracted value by default:
+          `db.Q.created.wrap_("substr", 1, 7) == "2025-01"`
+        - Use `db.Q.VALUE_` to place the extracted value elsewhere:
+          `db.Q.created.wrap_("strftime", "%Y", db.Q.VALUE_) == "2025"`
 
         Notes
         -----
@@ -485,6 +495,9 @@ class JSONLiteDB:
           disabled by default. Enable it only for trusted patterns.
         - Index usage depends on JSON path form. `$.key.subkey` is not the
           same as `("key", "subkey")` for index matching.
+        - SQLite validates whether wrapped functions exist, their argument
+          counts, and whether an expression is allowed in an index when SQL
+          is executed.
         - `db.query` is also available as `db()` and `db.search()`.
 
         Order By
@@ -501,6 +514,9 @@ class JSONLiteDB:
            >>> ("-key", "subkey", 3)
         4) Query object (no comparison):
            >>> db.Q.key
+           >>> db.Q.key.lower_()
+           >>> db.Q.key.length_()
+           >>> db.Q.created.wrap_("unixepoch")
            >>> -db.Q.key.subkey
            >>> db.Q.rowid_
 
@@ -512,6 +528,34 @@ class JSONLiteDB:
         JSON document key.
         """
         _load = query_kwargs.pop("_load", True)
+        sql, qvals = self.render_query(*query_args, **query_kwargs)
+        res = self.execute(sql, qvals)
+
+        return QueryResult(res, _load=_load)
+
+    __call__ = search = query
+
+    def render_query(self, *query_args, **query_kwargs):
+        """
+        Return the SQL and bind values that `query()` would execute.
+
+        Parameters
+        ----------
+        *query_args, **query_kwargs
+            Same as `query()`.
+
+        Returns
+        -------
+        tuple
+            ``(sql, filler)`` where ``sql`` is the full SELECT statement and
+            ``filler`` is the named-parameter dictionary for sqlite3.
+
+        Notes
+        -----
+        `_load` is accepted for API compatibility with `query()` but does not
+        affect the generated SQL.
+        """
+        query_kwargs.pop("_load", True)
         _limit = query_kwargs.pop("_limit", None)
         _orderby = query_kwargs.pop("_orderby", None)
 
@@ -519,20 +563,15 @@ class JSONLiteDB:
         limit = f"LIMIT {_limit:d}" if _limit else ""
 
         qstr, qvals = JSONLiteDB._query2sql(*query_args, **query_kwargs)
-        res = self.execute(
-            f"""
+        qstr = _indent_sql_continuation(qstr, 16)
+        sql = f"""
             SELECT rowid, data FROM {self.table} 
             WHERE
                 {qstr}
             {order}
             {limit}
-            """,
-            qvals,
-        )
-
-        return QueryResult(res, _load=_load)
-
-    __call__ = search = query
+            """
+        return sql, qvals
 
     def query_one(self, *query_args, **query_kwargs):
         """
@@ -792,19 +831,9 @@ class JSONLiteDB:
         *query_args, **query_kwargs
             Same as `query()`.
         """
-        _orderby = query_kwargs.pop("_orderby", None)
-        order = self._orderby2sql(_orderby)
-
-        qstr, qvals = JSONLiteDB._query2sql(*query_args, **query_kwargs)
-
+        sql, qvals = self.render_query(*query_args, **query_kwargs)
         res = self.execute(
-            f"""
-            EXPLAIN QUERY PLAN
-            SELECT data FROM {self.table} 
-            WHERE
-                {qstr}
-            {order}
-            """,
+            "EXPLAIN QUERY PLAN " + sql,
             qvals,
         )
         return [dict(row) for row in res]
@@ -1269,6 +1298,8 @@ class JSONLiteDB:
         >>> db.create_index("first")
         >>> db.create_index("first", "last")
         >>> db.create_index(db.Q.first, db.Q.last)
+        >>> db.create_index(db.Q.first.lower_())
+        >>> db.create_index(db.Q.created.wrap_("substr", 1, 7))
         >>> db.create_index(("address", "city"))
         >>> db.create_index(db.Q.address.city)
         >>> db.create_index(db.Q.addresses[1])
@@ -1280,19 +1311,19 @@ class JSONLiteDB:
         interchangeable for index matching. Use the same form in `query()`
         as you used when creating the index.
         """
-        paths = build_index_paths(*paths)
+        signatures = build_index_signatures(*paths)
+        expressions = build_index_expressions(*paths)
 
         index_name = (
-            f"ix_{self.table}_" + hashlib.md5("=".join(paths).encode()).hexdigest()[:8]
+            f"ix_{self.table}_"
+            + hashlib.md5("=".join(signatures).encode()).hexdigest()[:8]
         )
         if unique:
             index_name += "_UNIQUE"
 
         # sqlite3 prohibits parameters in index expressions so we have to
         # do this manually.
-        quoted_paths = ",".join(
-            f"JSON_EXTRACT(data, {sqlite_quote(path)})" for path in paths
-        )
+        quoted_paths = ",".join(expressions)
         with self:
             self.execute(f"""
                 CREATE {"UNIQUE" if unique else ""} INDEX IF NOT EXISTS {index_name} 
@@ -1338,9 +1369,10 @@ class JSONLiteDB:
         >>> db.drop_index("first", "last")  # no-op
         >>> db.drop_index("first", "last", unique=True)
         """
-        paths = build_index_paths(*paths)
+        signatures = build_index_signatures(*paths)
         index_name = (
-            f"ix_{self.table}_" + hashlib.md5("=".join(paths).encode()).hexdigest()[:8]
+            f"ix_{self.table}_"
+            + hashlib.md5("=".join(signatures).encode()).hexdigest()[:8]
         )
         if unique:
             index_name += "_UNIQUE"
@@ -1348,7 +1380,7 @@ class JSONLiteDB:
 
     @property
     def indexes(self):
-        """Return a mapping of index name -> list of JSON paths."""
+        """Return a mapping of index name -> list of indexed paths/expressions."""
         res = self.execute(
             """
             SELECT name,sql 
@@ -1360,8 +1392,8 @@ class JSONLiteDB:
         )
         indres = {}
         for row in res:
-            keys = re.findall(r"JSON_EXTRACT\(data,\s?'(.*?)'\s?\)", row["sql"])
-            if not keys:
+            keys = parse_index_expressions(row["sql"])
+            if keys is None:
                 continue
             indres[row["name"]] = keys
         return indres
@@ -1502,6 +1534,10 @@ class JSONLiteDB:
         for path, order, kind in pairs:
             if kind == "rowid":
                 clause = f"{self.table}.rowid {order}"
+            elif kind == "query":
+                clause = (
+                    f"{path._render_path_sql(data_expr=f'{self.table}.data')} {order}"
+                )
             else:
                 clause = (
                     f"JSON_EXTRACT({self.table}.data, {sqlite_quote(path)}) {order}"
@@ -1868,6 +1904,10 @@ class RegexDisabledError(ValueError):
     pass
 
 
+QUERY_VALUE = object()
+SQLTransform = namedtuple("SQLTransform", ("function", "args"))
+
+
 class Query:
     """
     Build composable query expressions for JSONLiteDB.
@@ -1882,13 +1922,20 @@ class Query:
 
     The special pseudo-field `rowid_` is reserved for `_orderby` usage and
     refers to the SQLite rowid rather than a JSON document key.
+
+    `VALUE_` is a placeholder used by `wrap_()` to explicitly position the
+    current JSON path expression in a SQL scalar-function call.
     """
+
+    VALUE_ = QUERY_VALUE
 
     def __init__(self):
         self._key = []
         self._qdict = {}
         self._query = None  # Only gets set upon comparison or _from_equality
         self._asc_or_desc = None
+        # Structured SQL scalar functions wrapped around JSON_EXTRACT(...).
+        self._transforms = []
 
     @staticmethod
     def _from_equality(k, v):
@@ -1914,7 +1961,27 @@ class Query:
         new._qdict = dict(self._qdict)
         new._query = self._query
         new._asc_or_desc = self._asc_or_desc
+        new._transforms = list(self._transforms)
         return new
+
+    def _render_path_sql(self, data_expr="data"):
+        if is_rowid_orderby_tokens(self._key):
+            if self._transforms:
+                raise DissallowedError("db.Q.rowid_ does not support SQL transforms")
+            return "ROWID"
+        if query_has_wildcard(self._key):
+            raise DissallowedError("Wildcard paths do not support SQL transforms")
+
+        r = _query_tuple2jsonpath({tuple(self._key): None})
+        path = list(r)[0]
+        expr = f"JSON_EXTRACT({data_expr}, {sqlite_quote(path)})"
+        for transform in self._transforms:
+            args = [
+                expr if arg is QUERY_VALUE else sqlite_quote(arg)
+                for arg in transform.args
+            ]
+            expr = f"{transform.function}({', '.join(args)})"
+        return expr
 
     ## Key Builders
     def __getattr__(self, attr):  # Query().key
@@ -1950,6 +2017,71 @@ class Query:
     def __setitem__(self, attr, item):
         raise DissallowedError("Cannot set values. Did you mean '=='?")
 
+    def wrap_(self, function, *args):
+        """
+        Apply a SQLite scalar function to the current path expression.
+
+        By default, the extracted JSON value is the function's first
+        argument. Use `db.Q.VALUE_` to place it elsewhere.
+
+        Parameters
+        ----------
+        function : str
+            SQL scalar-function name. It must be a simple identifier safe for
+            direct SQL interpolation. SQLite validates whether it exists and
+            accepts the supplied arguments when the SQL is executed.
+        *args
+            Literal function arguments, escaped with `sqlite_quote`.
+            `db.Q.VALUE_` may occur once to position the extracted value.
+
+        Returns
+        -------
+        Query
+            This query builder, allowing further transforms or comparison.
+
+        Examples
+        --------
+        >>> db.Q.created.wrap_("unixepoch")
+        >>> db.Q.created.wrap_("datetime", "unixepoch")
+        >>> db.Q.created.wrap_("strftime", "%Y", db.Q.VALUE_, "unixepoch")
+        >>> db.query(_orderby=db.Q.created.wrap_("unixepoch"))
+        """
+        if self._query:
+            raise DissallowedError("Cannot apply wrap_() to built query")
+        if is_rowid_orderby_tokens(self._key):
+            raise DissallowedError("db.Q.rowid_ does not support wrap_()")
+        if query_has_wildcard(self._key):
+            raise DissallowedError("Wildcard paths do not support wrap_()")
+        if not isinstance(function, str) or not VALID_TABLE_RE.fullmatch(function):
+            raise ValueError(f"Invalid SQL function name: {function!r}")
+        if sum(arg is QUERY_VALUE for arg in args) > 1:
+            raise ValueError("db.Q.VALUE_ may appear at most once in wrap_()")
+        if any(isinstance(arg, Query) for arg in args):
+            raise ValueError("wrap_() arguments must be literal values")
+
+        if not any(arg is QUERY_VALUE for arg in args):
+            args = (QUERY_VALUE, *args)
+        self._transforms.append(SQLTransform(function.upper(), tuple(args)))
+        return self
+
+    def lower_(self):
+        """
+        Apply SQLite LOWER() to the current path expression.
+
+        Useful for case-insensitive equality, pattern matching, ordering,
+        and expression indexes.
+        """
+        return self.wrap_("LOWER")
+
+    def length_(self):
+        """
+        Apply SQLite LENGTH() to the current path expression.
+
+        Useful for filtering, ordering, and expression indexes based on the
+        extracted value length.
+        """
+        return self.wrap_("LENGTH")
+
     ## Comparisons
     def _compare(self, val, *, sym):
         if self._query:
@@ -1980,9 +2112,10 @@ class Query:
 
         r = _query_tuple2jsonpath({tuple(self._key): val})  # Will just return one item
         k, v = list(r.items())[0]
+        expr = self._render_path_sql()
 
         if val is None and sym in {"=", "!="}:
-            self._query = f"( JSON_EXTRACT(data, {sqlite_quote(k)}) IS {'NOT' if sym == '!=' else ''} NULL )"
+            self._query = f"( {expr} IS {'NOT' if sym == '!=' else ''} NULL )"
             return self
 
         qv = randkey()
@@ -1991,7 +2124,7 @@ class Query:
         # JSON_EXTRACT will accept a ? for the query but it will then break
         # usage with indices (and index creation will NOT accept ?). Therefore,
         # include it directly. Escape it still
-        self._query = f"( JSON_EXTRACT(data, {sqlite_quote(k)}) {sym} {qv} )"
+        self._query = f"( {expr} {sym} {qv} )"
         return self
 
     def exists_(self):
@@ -2111,9 +2244,7 @@ class Query:
             if query_has_wildcard(self._key):
                 q = f"PATH({format_query_tokens(self._key)})"
             elif not is_rowid_orderby_tokens(self._key):
-                qdict = _query_tuple2jsonpath({tuple(self._key): None})
-                k = list(qdict)[0]
-                q = f"JSON_EXTRACT(data, {sqlite_quote(k)})"
+                q = self._render_path_sql()
         else:
             q = ""
 
@@ -2248,6 +2379,47 @@ def build_index_paths(*args):
     return paths
 
 
+def build_index_expressions(*args):
+    """
+    Normalize index inputs into SQL expressions suitable for CREATE INDEX.
+    """
+    expressions = []
+    for arg in args:
+        if isinstance(arg, Query):
+            if arg._query:
+                raise AssignedQueryError(
+                    "Cannot index an assigned query. "
+                    "Example: 'db.Q.key' is acceptable "
+                    "but 'db.Q.key == val' is NOT"
+                )
+            expressions.append(arg._render_path_sql())
+            continue
+
+        path = build_index_paths(arg)[0]
+        expressions.append(f"JSON_EXTRACT(data, {sqlite_quote(path)})")
+    return expressions
+
+
+def build_index_signatures(*args):
+    """
+    Normalize index inputs into stable signature strings for index naming.
+    """
+    signatures = []
+    for arg in args:
+        if isinstance(arg, Query) and arg._transforms:
+            if arg._query:
+                raise AssignedQueryError(
+                    "Cannot index an assigned query. "
+                    "Example: 'db.Q.key' is acceptable "
+                    "but 'db.Q.key == val' is NOT"
+                )
+            signatures.append(arg._render_path_sql())
+            continue
+
+        signatures.extend(build_index_paths(arg))
+    return signatures
+
+
 def build_orderby_pairs(orderby):
     """
     Normalize an order-by specification into `(path_or_field, order, kind)` tuples.
@@ -2279,6 +2451,9 @@ def build_orderby_pairs(orderby):
             if is_rowid_orderby_tokens(item._key):
                 orders.append(("rowid", order, "rowid"))
                 continue
+            if item._transforms:
+                orders.append((item, order, "query"))
+                continue
             item = tuple(item._key)
 
         if isinstance(item, str):  # type 1 or 2
@@ -2295,6 +2470,14 @@ def build_orderby_pairs(orderby):
         elif isinstance(item, tuple):  # type 3
             if len(item) == 0:
                 raise ValueError("Cannot have an empty tuple for ordering")
+            if any(isinstance(part, Query) for part in item):
+                raise ValueError(
+                    "Use a list for multiple Query orderings, e.g. "
+                    "_orderby=[db.Q.a, db.Q.b]. Tuples are interpreted as "
+                    "one JSON path, e.g. _orderby=('a', 'b') orders by a.b; "
+                    "use _orderby=[('a', 'b'), ('c', 'd')] for multiple "
+                    "tuple-path orderings."
+                )
 
             if isinstance(item[0], str):
                 if item[0].startswith("-"):
@@ -2318,6 +2501,98 @@ def build_orderby_pairs(orderby):
         else:
             raise ValueError("Unrecognized item for ORDER BY")
     return orders
+
+
+def parse_index_expressions(sql):
+    """
+    Parse indexed JSON_EXTRACT expressions from sqlite_schema SQL.
+
+    SQLite returns the original CREATE INDEX statement. Extract its top-level
+    indexed expressions, then replace JSON_EXTRACT calls with their shorter
+    JSON path form for display in `db.indexes`.
+    """
+    if not sql:
+        return None
+
+    # Find the opening parenthesis of ``ON table(...)``. Everything through
+    # its matching closing parenthesis is the index expression list.
+    match = re.search(r"\bON\b\s+\S+\s*\(", sql, flags=re.IGNORECASE)
+    if not match:
+        return None
+
+    # Locate that matching closing parenthesis. We cannot use ``find(")")``
+    # because wrapped expressions contain nested function calls. Parentheses
+    # inside SQL string literals must also be ignored. SQLite escapes a quote
+    # inside a string by doubling it, so skip both characters in ``''``.
+    start = match.end()
+    depth = 1
+    in_string = False
+    i = start
+    while i < len(sql) and depth:
+        char = sql[i]
+        if char == "'":
+            if in_string and i + 1 < len(sql) and sql[i + 1] == "'":
+                i += 2
+                continue
+            in_string = not in_string
+        elif not in_string:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+        i += 1
+    if depth:
+        return None
+
+    body = sql[start : i - 1]
+
+    # Split the expression list at top-level commas only. For example, the
+    # commas in SUBSTR(JSON_EXTRACT(...), 1, 7) are function arguments, while
+    # the comma following the complete SUBSTR call separates two indexes.
+    # As above, commas and parentheses inside quoted literals do not affect
+    # the parser state.
+    raw_expressions = []
+    expr_start = 0
+    depth = 0
+    in_string = False
+    i = 0
+    while i < len(body):
+        char = body[i]
+        if char == "'":
+            if in_string and i + 1 < len(body) and body[i + 1] == "'":
+                i += 2
+                continue
+            in_string = not in_string
+        elif not in_string:
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            elif char == "," and depth == 0:
+                raw_expressions.append(body[expr_start:i].strip())
+                expr_start = i + 1
+        i += 1
+    raw_expressions.append(body[expr_start:].strip())
+
+    # Keep the complete wrapper expression, but shorten each embedded
+    # JSON_EXTRACT(data, '$."path"') to $."path". Expressions without a
+    # JSON_EXTRACT refer to unrelated SQLite columns and are not reported by
+    # JSONLiteDB's index introspection.
+    json_extract_re = re.compile(
+        r"JSON_EXTRACT\(\s*data\s*,\s*'((?:''|[^'])*)'\s*\)",
+        flags=re.IGNORECASE,
+    )
+    expressions = []
+    for expression in raw_expressions:
+        if not json_extract_re.search(expression):
+            continue
+        display = json_extract_re.sub(
+            lambda path_match: path_match.group(1).replace("''", "'"),
+            expression,
+        )
+        expressions.append(display)
+
+    return expressions or None
 
 
 def split_query(path):
@@ -2423,6 +2698,24 @@ def _wildcard_compare_clause(expr, sym, qv):
     return f"{expr} {sym} {qv}"
 
 
+def _indent_sql_continuation(sql, indent):
+    """Indent all but the first line of a SQL fragment."""
+    lines = sql.splitlines()
+    if len(lines) <= 1:
+        return sql
+    return "\n".join([lines[0], *(" " * indent + line for line in lines[1:])])
+
+
+def _prefix_sql_lines(prefix, sql, continuation_indent):
+    """Prefix the first SQL line and indent remaining lines."""
+    lines = sql.splitlines()
+    if not lines:
+        return prefix.rstrip()
+    out = [prefix + lines[0]]
+    out.extend(" " * continuation_indent + line for line in lines[1:])
+    return "\n".join(out)
+
+
 def _compile_wildcard_exists(tokens, predicate_builder):
     """Compile a wildcard token path into nested EXISTS(JSON_EACH(...)) SQL."""
     parts, wildcard_count = split_query_tokens_on_wildcard(tokens)
@@ -2437,12 +2730,18 @@ def _compile_wildcard_exists(tokens, predicate_builder):
         path = tokens_to_json_path(path_tokens)
         # Each wildcard adds one more JSON_EACH scope. The innermost predicate
         # is built first, then wrapped outward for nested wildcards.
-        predicate = f"""EXISTS (
-            SELECT 1
-            FROM JSON_EACH({scope_expr}, {sqlite_quote(path)}) AS jldb_each_{idx}
-            WHERE {array_type} AND {predicate}
-        )"""
-    return f"( {predicate} )"
+        predicate = "\n".join(
+            [
+                "EXISTS (",
+                "    SELECT 1",
+                f"    FROM JSON_EACH({scope_expr}, {sqlite_quote(path)}) AS jldb_each_{idx}",
+                "    WHERE",
+                f"        {array_type}",
+                _prefix_sql_lines("        AND ", predicate, 12),
+                ")",
+            ]
+        )
+    return predicate
 
 
 def _compile_wildcard_compare(tokens, *, sym, qv):

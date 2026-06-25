@@ -2,6 +2,20 @@
 
 Newest on top
 
+## 0.5.2 (2026-06-24)
+
+- Added `db.Q.path.wrap_()` to apply other SQLite scalar functions in queries, ordering, and expression indexes. Literal function arguments are supported, and `db.Q.VALUE_` can explicitly position the extracted JSON value in the function call. Special cases:
+    - Added `db.Q.path.lower_()` to apply SQLite `LOWER()` in queries, ordering, and expression indexes. This also works with `LIKE` and `GLOB`, and `db.indexes` now displays these lowered expression indexes. Note that this does *not* work on query arrays. `db.Q.tags[:].lower_() == 'red'` will error.
+    - Added `db.Q.path.length_()` to apply SQLite `LENGTH()` in queries, ordering, and expression indexes, with `db.indexes` displaying these length-based expression indexes.
+- Adds `db.render_query()` as a common interface to building the SQL query and for introspection of the SQL query.
+
+Documentation:
+
+- Moves documentation from Jupyter Notebooks to [md-demo](https://github.com/Jwink3101/md-demo).
+- Adds and combines security review documents.
+
+ChatGPT 5.5 + Codex was used to add this feature. The code has been reviewed and verified by human developers
+
 ## 0.5.1 (2026-05-08)
 
 - Added an array query mode using `[:]` to tell JSONLiteDB to use a table-valued query. Enables queries like `db.Q.tags[:] == 'red'` to search all tags.

@@ -33,3 +33,6 @@ version = { attr = "jsonlitedb.__version__" }
 
 [tool.isort]
 profile = "black"
+
+[tool.black]
+target-version = ["py39"]
