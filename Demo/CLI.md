@@ -2,6 +2,18 @@
 runtime: bash
 setup: |
     set +e
+    # md-demo may execute from the repo root or the Demo directory.
+    # Find the checkout so the examples exercise this working tree.
+    _jsonlitedb_repo="$PWD"
+    if [ ! -d "$_jsonlitedb_repo/jsonlitedb" ] && [ -d "$_jsonlitedb_repo/../jsonlitedb" ]; then
+        _jsonlitedb_repo="$(cd "$_jsonlitedb_repo/.." && pwd)"
+    fi
+    export PYTHONPATH="${_jsonlitedb_repo}${PYTHONPATH:+:${PYTHONPATH}}"
+    # Shadow any installed console script while keeping the visible
+    # examples as `jsonlitedb ...` commands.
+    jsonlitedb() {
+        python -c 'import sys; sys.argv[0] = "jsonlitedb"; from jsonlitedb.cli import cli; cli()' "$@"
+    }
     rm -rf my.db 1> /dev/null 2>&1
     export JSONLITEDB_DISABLE_META=true # metadata in the file causes churn. Disable it for this demo
 -->
@@ -20,7 +32,7 @@ jsonlitedb --version
 
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
 ```
-jsonlitedb-0.5.1
+jsonlitedb-0.5.3
 ```
 <!-- md-demo: result end -->
 ```bash exe

@@ -2,6 +2,10 @@
 
 Newest on top
 
+## 0.5.3 (2026-07-04)
+
+* Adds queries to aggregate functions like `SUM`
+
 ## 0.5.2 (2026-06-24)
 
 - Added `db.Q.path.wrap_()` to apply other SQLite scalar functions in queries, ordering, and expression indexes. Literal function arguments are supported, and `db.Q.VALUE_` can explicitly position the extracted JSON value in the function call. Special cases:

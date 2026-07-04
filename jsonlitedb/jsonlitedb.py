@@ -18,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 __all__ = [
     "AssignedQueryError",
@@ -771,7 +771,7 @@ class JSONLiteDB:
         ).fetchone()
         return res["count"]
 
-    def aggregate(self, path, /, function):
+    def aggregate(self, path, /, *query_args, _function=None, **query_kwargs):
         """
         Compute an aggregate over a JSON path.
 
@@ -779,8 +779,13 @@ class JSONLiteDB:
         ----------
         path : str | tuple | Query
             JSON path to aggregate.
-        function : str
+        _function : str
             One of: 'AVG', 'COUNT', 'MAX', 'MIN', 'SUM', 'TOTAL'.
+            For backwards compatibility, this may be passed as the first
+            positional argument after `path`.
+        *query_args, **query_kwargs
+            Same as `query()`. Supports `_limit` and `_orderby` like
+            `query()`.
 
         Returns
         -------
@@ -799,28 +804,47 @@ class JSONLiteDB:
         >>> db.aggregate("value", "AVG")
         20.0
 
+        >>> db.aggregate("value", "SUM", value=20)
+        20
+
+        >>> db.aggregate("value", value=20, _function="SUM")
+        20
+
         >>> db.AVG("value")
         20.0
+
+        >>> db.SUM("value", value=20)
+        20
         """
         allowed = {"AVG", "COUNT", "MAX", "MIN", "SUM", "TOTAL"}
-        function = function.upper()
-        if function not in allowed:
-            raise ValueError(f"Unallowed aggregate function {function!r}")
+        if _function is None:
+            try:
+                _function, *query_args = query_args
+            except ValueError as exc:
+                raise TypeError("Missing required aggregate function") from exc
+
+        _function = _function.upper()
+        if _function not in allowed:
+            raise ValueError(f"Unallowed aggregate function {_function!r}")
 
         path = build_index_paths(path)[0]  # Always just one
-        res = self.execute(f"""
-            SELECT {function}(JSON_EXTRACT({self.table}.data, {sqlite_quote(path)})) 
-            AS val FROM {self.table}
-            """)
+        sql, qvals = self.render_query(*query_args, **query_kwargs)
+        res = self.execute(
+            f"""
+            SELECT {_function}(JSON_EXTRACT(data, {sqlite_quote(path)})) 
+            AS val FROM ({sql})
+            """,
+            qvals,
+        )
 
         return res.fetchone()["val"]
 
-    AVG = partialmethod(aggregate, function="AVG")
-    COUNT = partialmethod(aggregate, function="COUNT")
-    MAX = partialmethod(aggregate, function="MAX")
-    MIN = partialmethod(aggregate, function="MIN")
-    SUM = partialmethod(aggregate, function="SUM")
-    TOTAL = partialmethod(aggregate, function="TOTAL")
+    AVG = partialmethod(aggregate, _function="AVG")
+    COUNT = partialmethod(aggregate, _function="COUNT")
+    MAX = partialmethod(aggregate, _function="MAX")
+    MIN = partialmethod(aggregate, _function="MIN")
+    SUM = partialmethod(aggregate, _function="SUM")
+    TOTAL = partialmethod(aggregate, _function="TOTAL")
 
     def explain_query(self, *query_args, **query_kwargs):
         """

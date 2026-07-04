@@ -156,8 +156,15 @@ def test_JSONLiteDB_general():
     # Aggregates
     assert db.MIN("born") == 1926
     assert db.MAX("born") == 1943
+    assert db.SUM("born", first="George") == 7738
+    assert db.aggregate("born", "SUM", first="George") == 7738
+    assert db.aggregate("born", db.Q.first == "George", _function="SUM") == 7738
+    assert db.SUM("born", first="George", _orderby="born", _limit=1) == 1926
+    agg_db = JSONLiteDB(":memory:")
+    agg_db.insert({"born": 1950, "function": "SUM"})
+    assert agg_db.aggregate("born", "SUM", function="SUM") == 1950
     with pytest.raises(ValueError):
-        db.aggregate("born", function="bla")
+        db.aggregate("born", _function="bla")
 
     # Bad query
     with pytest.raises(MissingValueError):

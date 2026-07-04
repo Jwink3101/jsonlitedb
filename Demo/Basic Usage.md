@@ -16,7 +16,7 @@ print(f"{jsonlitedb.__version__ = }")
 
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
 ```
-jsonlitedb.__version__ = '0.5.2'
+jsonlitedb.__version__ = '0.5.3'
 ```
 <!-- md-demo: result end -->
 ```python exe

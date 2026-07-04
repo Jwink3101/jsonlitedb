@@ -19,7 +19,7 @@ print(f"{jsonlitedb.__version__ = }")
 `Out:`
 
 ```
-jsonlitedb.__version__ = '0.5.2'
+jsonlitedb.__version__ = '0.5.3'
 ```
 <!-- md-demo: result end -->
 ```python exe
@@ -1004,6 +1004,19 @@ db.aggregate("orders", "SUM")  # == db.SUM('orders')
 
 ```
 943
+```
+<!-- md-demo: result end -->
+Aggregates also accept the same query arguments as `query()`.
+
+```python exe
+db.SUM("orders", make="Ford")
+```
+
+<!-- md-demo: result start. Do not edit; this block is overwritten. -->
+`Out:`
+
+```
+900
 ```
 <!-- md-demo: result end -->
 ## Deletions
