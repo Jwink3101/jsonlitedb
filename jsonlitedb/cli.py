@@ -123,7 +123,8 @@ def cli():
         metavar="COMMAND",
         description=dedent("""
             Read-only commands: query, count, dump, indexes, stats
-            Write commands: insert, import, add, delete, patch, create-index, drop-index
+            Write commands: insert, import, add, delete, patch, create-index, drop-index,
+            wal-checkpoint
 
             These commands offer many options but use the Python JSONLiteDB module or
             direct sqlite3 for full manipulation.
@@ -400,6 +401,26 @@ def cli():
     )
     stats.add_argument("dbpath", help="JSONLiteDB file")
 
+    wal_checkpoint = subparser.add_parser(
+        "wal-checkpoint",
+        help="checkpoint and remove WAL sidecar files (i.e. '-wal' and '-shm')",
+        parents=[global_parent],
+        description=(
+            "Run PRAGMA wal_checkpoint(TRUNCATE) and close the database. By "
+            "default, also remove the database's -wal and -shm sidecar files."
+        ),
+    )
+    wal_checkpoint.add_argument("dbpath", help="JSONLiteDB file")
+    wal_checkpoint.add_argument(
+        "--delete",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Delete the database's -wal and -shm sidecar files after closing "
+            "the database. Default: %(default)s"
+        ),
+    )
+
     delete_desc = dedent("""
         Delete rows matching equality filters.
 
@@ -530,7 +551,8 @@ def cli():
                   query, count, dump, indexes, stats
 
                 COMMAND (write):
-                  insert, import, add, delete, patch, create-index, drop-index
+                  insert, import, add, delete, patch, create-index, drop-index,
+                  wal-checkpoint
                 """))
         raise SystemExit(0)
 
@@ -562,7 +584,7 @@ def cli():
             parser.error(f"unrecognized arguments: {' '.join(extras)}")
 
     create_if_missing_commands = {"insert", "import", "add", "create-index"}
-    write_existing_commands = {"delete", "patch", "drop-index"}
+    write_existing_commands = {"delete", "patch", "drop-index", "wal-checkpoint"}
     read_only_existing_commands = {"query", "count", "dump", "indexes", "stats"}
 
     def _db_missing_message(command, dbpath):
@@ -812,6 +834,16 @@ def cli():
             for name, paths in stats_obj["indexes"].items():
                 suffix = " [UNIQUE]" if name.endswith("_UNIQUE") else ""
                 sys.stdout.write(f"  - {name}{suffix}: {', '.join(paths)}\n")
+    elif args.command == "wal-checkpoint":
+        db.wal_checkpoint(mode="TRUNCATE")
+        db.close()
+        if args.delete:
+            for suffix in ("-wal", "-shm"):
+                try:
+                    os.remove(f"{args.dbpath}{suffix}")
+                except FileNotFoundError:
+                    pass
+        return
 
     db.close()
 

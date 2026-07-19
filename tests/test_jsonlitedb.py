@@ -163,6 +163,8 @@ def test_JSONLiteDB_general():
     agg_db = JSONLiteDB(":memory:")
     agg_db.insert({"born": 1950, "function": "SUM"})
     assert agg_db.aggregate("born", "SUM", function="SUM") == 1950
+    with pytest.raises(TypeError, match="Missing required aggregate function"):
+        db.aggregate("born")
     with pytest.raises(ValueError):
         db.aggregate("born", _function="bla")
 
@@ -1956,6 +1958,8 @@ def test_query_wrap_leaves_function_validation_to_sqlite():
 
 def test_parse_index_expressions():
     assert core.parse_index_expressions(None) is None
+    assert core.parse_index_expressions("CREATE INDEX without an ON clause") is None
+    assert core.parse_index_expressions("CREATE INDEX ix ON items(") is None
     assert core.parse_index_expressions("""CREATE INDEX ix ON items(
             JSON_EXTRACT(data, '$."name"'),
             LOWER(JSON_EXTRACT(data, '$."email"')),
@@ -1975,6 +1979,9 @@ def test_parse_index_expressions():
             """PRINTF('value=(%s, %s)', $."first", 'literal')""",
         ]
     )
+    assert core.parse_index_expressions("""CREATE INDEX ix ON items(
+        PRINTF('it''s %s', JSON_EXTRACT(data, '$."name"'))
+    )""") == ["PRINTF('it''s %s', $.\"name\")"]
     assert (
         core.parse_index_expressions("CREATE INDEX ix ON items(other_column)") is None
     )

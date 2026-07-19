@@ -2,6 +2,10 @@
 
 Newest on top
 
+## 0.5.4 (2026-07-19)
+
+* Adds `wal-checkpoint` CLI
+
 ## 0.5.3 (2026-07-04)
 
 * Adds queries to aggregate functions like `SUM`

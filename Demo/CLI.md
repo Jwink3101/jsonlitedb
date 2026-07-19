@@ -32,7 +32,7 @@ jsonlitedb --version
 
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
 ```
-jsonlitedb-0.5.3
+jsonlitedb-0.5.4
 ```
 <!-- md-demo: result end -->
 ```bash exe

@@ -261,6 +261,73 @@ def test_cli_top_level_help_shows_read_write_command_lists():
     assert "query, count, dump, indexes, stats" in help_text
     assert "COMMAND (write):" in help_text
     assert "insert, import, add, delete, patch, create-index, drop-index" in help_text
+    assert "wal-checkpoint" in help_text
+
+
+def test_cli_wal_checkpoint_truncates_and_removes_sidecars(tmp_path, monkeypatch):
+    dbpath = tmp_path / "checkpoint.db"
+    db = JSONLiteDB(dbpath)
+    db.insert({"value": 1})
+    db.close()
+
+    sidecars = [Path(f"{dbpath}-wal"), Path(f"{dbpath}-shm")]
+    for sidecar in sidecars:
+        sidecar.touch()
+
+    checkpoint_modes = []
+    original_checkpoint = JSONLiteDB.wal_checkpoint
+
+    def track_checkpoint(self, mode=None):
+        checkpoint_modes.append(mode)
+        return original_checkpoint(self, mode=mode)
+
+    monkeypatch.setattr(JSONLiteDB, "wal_checkpoint", track_checkpoint)
+
+    with MockArgv(["wal-checkpoint", str(dbpath)], shift=1):
+        cli()
+
+    assert checkpoint_modes == ["TRUNCATE"]
+    assert all(not sidecar.exists() for sidecar in sidecars)
+
+
+def test_cli_wal_checkpoint_no_delete(tmp_path, monkeypatch):
+    dbpath = tmp_path / "checkpoint-no-delete.db"
+    db = JSONLiteDB(dbpath)
+    db.close()
+
+    monkeypatch.setattr(os, "remove", None)
+
+    with MockArgv(["wal-checkpoint", str(dbpath), "--no-delete"], shift=1):
+        cli()
+
+
+def test_cli_wal_checkpoint_help_describes_delete_default():
+    with MockArgv(["wal-checkpoint", "-h"], shift=1):
+        with (
+            pytest.raises(SystemExit) as exc,
+            contextlib.redirect_stdout(io.StringIO()) as help_out,
+        ):
+            cli()
+
+    assert exc.value.code == 0
+    help_text = help_out.getvalue()
+    assert "--delete, --no-delete" in help_text
+    assert "Default: True" in help_text
+
+
+def test_cli_wal_checkpoint_requires_existing_database(tmp_path):
+    dbpath = tmp_path / "missing.db"
+
+    with MockArgv(["wal-checkpoint", str(dbpath)], shift=1):
+        with (
+            pytest.raises(SystemExit) as exc,
+            contextlib.redirect_stderr(io.StringIO()) as err_out,
+        ):
+            cli()
+
+    assert exc.value.code == 1
+    assert "database does not exist" in err_out.getvalue()
+    assert not dbpath.exists()
 
 
 def test_cli_query_format_edges():

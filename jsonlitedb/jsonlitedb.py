@@ -18,7 +18,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.5.3"
+__version__ = "0.5.4"
 
 __all__ = [
     "AssignedQueryError",

@@ -19,7 +19,7 @@ print(f"{jsonlitedb.__version__ = }")
 `Out:`
 
 ```
-jsonlitedb.__version__ = '0.5.3'
+jsonlitedb.__version__ = '0.5.4'
 ```
 <!-- md-demo: result end -->
 ```python exe
