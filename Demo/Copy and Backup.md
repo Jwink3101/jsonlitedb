@@ -3,130 +3,109 @@ setup: |
   import init_demo_mode
 -->
 
-# Database Copy and Backup
+# Database Backup and Branching
 
-A quick example of using [sqlite3 backup][back] methods to copy and backup databases.
+`JSONLiteDB.backup()` copies a database using SQLite's [online backup API][back]. The destination can be a path, an `sqlite3.Connection`, or another `JSONLiteDB` instance.
 
-These work because you can specify an `sqlite3.Connection` object to instantiate JSONLiteDB
-
-[back]:https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup
+[back]: https://docs.python.org/3/library/sqlite3.html#sqlite3.Connection.backup
 
 ```python exe
-import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from jsonlitedb import JSONLiteDB
 ```
 
-```python exe
-import sqlite3
-import subprocess
-```
+## Copy to another database
+
+Create an in-memory database and populate it:
 
 ```python exe
-db0 = JSONLiteDB(":memory:")
-print(db0)
-```
-
-<!-- md-demo: result start. Do not edit; this block is overwritten. -->
-```
-JSONLiteDB(':memory:')
-```
-<!-- md-demo: result end -->
-```python exe
-db0.insert(
-    {"first": "John", "last": "Lennon", "born": 1940, "role": "guitar"},
-    {"first": "Paul", "last": "McCartney", "born": 1942, "role": "bass"},
-    {"first": "George", "last": "Harrison", "born": 1943, "role": "guitar"},
-    {"first": "Ringo", "last": "Starr", "born": 1940, "role": "drums"},
-    {"first": "George", "last": "Martin", "born": 1926, "role": "producer"},
+source = JSONLiteDB.memory()
+source.insert(
+    {"first": "John", "last": "Lennon", "role": "guitar"},
+    {"first": "Paul", "last": "McCartney", "role": "bass"},
+    {"first": "George", "last": "Harrison", "role": "guitar"},
+    {"first": "Ringo", "last": "Starr", "role": "drums"},
 )
 ```
 
-Copy it by createing a new database connection
+Back it up directly to another `JSONLiteDB` instance:
 
 ```python exe
-# TMP sqlite3 connection
-_db1 = sqlite3.connect(":memory:")
-
-# Use the underlying sqlite3.Connection object of db0 to backup
-db0.db.backup(_db1)
-
-# create a new database
-db1 = JSONLiteDB(_db1)
-print(db1)
+copy = JSONLiteDB.memory()
+source.backup(copy)
+copy.query(_orderby="first").all()
 ```
 
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
 ```
-JSONLiteDB('*existing connection*')
+[{'first': 'George', 'last': 'Harrison', 'role': 'guitar'},
+ {'first': 'John', 'last': 'Lennon', 'role': 'guitar'},
+ {'first': 'Paul', 'last': 'McCartney', 'role': 'bass'},
+ {'first': 'Ringo', 'last': 'Starr', 'role': 'drums'}]
 ```
 <!-- md-demo: result end -->
+The backup is an independent database. Later changes do not affect the source:
+
 ```python exe
-list(db1)
+copy.delete(first="Ringo")
+print(f"{source.count() = }")
+print(f"{copy.count() = }")
 ```
 
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
 ```
-[{'born': 1940, 'first': 'John', 'last': 'Lennon', 'role': 'guitar'},
- {'born': 1942, 'first': 'Paul', 'last': 'McCartney', 'role': 'bass'},
- {'born': 1943, 'first': 'George', 'last': 'Harrison', 'role': 'guitar'},
- {'born': 1940, 'first': 'Ringo', 'last': 'Starr', 'role': 'drums'},
- {'born': 1926, 'first': 'George', 'last': 'Martin', 'role': 'producer'}]
+source.count() = 4
+copy.count() = 3
 ```
 <!-- md-demo: result end -->
-Demonstrate that they are not the same underlying database
+## Back up to a file
+
+A path can be passed directly; there is no need to open or close a separate SQLite connection:
 
 ```python exe
-db1.delete(last="Martin")
-print(f"{db0.count(last='Martin') = }")
-print(f"{db1.count(last='Martin') = }")
+tmpdir = TemporaryDirectory()
+backup_path = Path(tmpdir.name) / "backup.db"
+
+source.backup(backup_path)
+saved = JSONLiteDB.read_only(backup_path)
+print(f"{saved.count() = }")
+saved.close()
 ```
 
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
 ```
-db0.count(last='Martin') = 1
-db1.count(last='Martin') = 0
+saved.count() = 4
 ```
 <!-- md-demo: result end -->
-The same approach can be used to save an in-memory database too
+## Branch and continue from the backup
+
+With `reopen=True`, the object switches to the destination after copying. This is useful for branching a file-backed database into memory before making temporary changes:
 
 ```python exe
-try:  # Just to make sure it gets cleared
-    dbfile = sqlite3.connect("mydb.db")
-    db0.db.backup(dbfile)
-    dbfile.close()
+original_path = Path(tmpdir.name) / "original.db"
+working = JSONLiteDB(original_path)
+working.insert({"version": "original"})
 
-    print(f"{os.path.exists('mydb.db') = }")
+working.backup(":memory:", reopen=True)
+working.insert({"version": "temporary"})
 
-    db2 = JSONLiteDB("mydb.db")
-    print(f"{len(db2) = }")
+original = JSONLiteDB.read_only(original_path)
+print(f"{original.count() = }")
+print(f"{working.count() = }")
+print(working)
 
-    print(subprocess.check_output(["sqlite3", "mydb.db", ".dump"]).decode())
-finally:
-    pass  # os.unlink('mydb.db') # This will also fail if mydb.db didn't exist
+original.close()
+working.close()
+source.close()
+copy.close()
+tmpdir.cleanup()
 ```
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
 ```
-os.path.exists('mydb.db') = True
-len(db2) = 5
-PRAGMA foreign_keys=OFF;
-BEGIN TRANSACTION;
-CREATE TABLE items(
-    rowid INTEGER PRIMARY KEY AUTOINCREMENT,
-    data TEXT
-);
-INSERT INTO items VALUES(1,'{"first":"John","last":"Lennon","born":1940,"role":"guitar"}');
-INSERT INTO items VALUES(2,'{"first":"Paul","last":"McCartney","born":1942,"role":"bass"}');
-INSERT INTO items VALUES(3,'{"first":"George","last":"Harrison","born":1943,"role":"guitar"}');
-INSERT INTO items VALUES(4,'{"first":"Ringo","last":"Starr","born":1940,"role":"drums"}');
-INSERT INTO items VALUES(5,'{"first":"George","last":"Martin","born":1926,"role":"producer"}');
-CREATE TABLE items_kv(
-    key TEXT PRIMARY KEY,
-    val TEXT
-);
-DELETE FROM sqlite_sequence;
-INSERT INTO sqlite_sequence VALUES('items',5);
-COMMIT;
-
+original.count() = 1
+working.count() = 2
+JSONLiteDB(':memory:')
 ```
 <!-- md-demo: result end -->

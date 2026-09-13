@@ -356,6 +356,35 @@ db.count((db.Q.kids[:].first == "Jane").and_(db.Q.age < 38))
 1
 ```
 <!-- md-demo: result end -->
+
+Empty arrays, JSON `null`, and missing paths are different states. The `empty()` and `not_empty()` predicates match arrays by their length, while `exists_()` also matches a path whose value is JSON `null`:
+
+```python exe
+array_states = JSONLiteDB.memory()
+array_states.insert(
+    {"name": "empty", "tags": []},
+    {"name": "non-empty", "tags": ["red"]},
+    {"name": "null", "tags": None},
+    {"name": "missing"},
+)
+
+print([row["name"] for row in array_states.query(array_states.Q.tags.empty())])
+print([row["name"] for row in array_states.query(array_states.Q.tags.not_empty())])
+print([row["name"] for row in array_states.query(array_states.Q.tags.exists_())])
+print([row["name"] for row in array_states.query(array_states.Q.tags.missing_())])
+array_states.close()
+```
+
+<!-- md-demo: result start. Do not edit; this block is overwritten. -->
+`Out:`
+
+```
+['empty']
+['non-empty']
+['empty', 'non-empty', 'null']
+['missing']
+```
+<!-- md-demo: result end -->
 ### Keys/Paths
 
 We can also look into the items more. Recall that in these examples, there are lots of common keys but there doesn't have to be!
@@ -956,6 +985,25 @@ db.query_one(make="Ford")  # Will have 900 orders
 {'color': 'green', 'make': 'Ford', 'model': 'F-150', 'orders': 900}
 ```
 <!-- md-demo: result end -->
+
+`update_many()` saves several returned rows in one operation. Each returned dictionary retains the `rowid` that identifies its stored row:
+
+```python exe
+rows = db.query(db.Q.orders.exists_()).all()
+for item in rows:
+    item["reviewed"] = True
+db.update_many(rows)
+
+db.count(reviewed=True)
+```
+
+<!-- md-demo: result start. Do not edit; this block is overwritten. -->
+`Out:`
+
+```
+3
+```
+<!-- md-demo: result end -->
 ## Aggregate Functions
 
 Data can also be aggregated with AVG COUNT MAX MIN SUM TOTAL either directly or with a method of that name. See https://www.sqlite.org/lang_aggfunc.html for description.
@@ -1038,7 +1086,8 @@ And can also delete one or more by rowid if known.
 ```python exe
 rowid = db.query(db.Q.make == "Kia").one().rowid
 print(f"{rowid = }")
-db.delete_by_rowid(rowid)
+print(db[rowid])
+del db[rowid]
 ```
 
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
@@ -1046,6 +1095,7 @@ db.delete_by_rowid(rowid)
 
 ```
 rowid = 3
+{'make': 'Kia', 'model': 'Telluride', 'color': 'red', 'orders': 8, 'reviewed': True}
 ```
 <!-- md-demo: result end -->
 ## Patch

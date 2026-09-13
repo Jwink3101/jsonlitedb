@@ -19,6 +19,32 @@ print(f"{jsonlitedb.__version__ = }")
 jsonlitedb.__version__ = '0.5.4'
 ```
 <!-- md-demo: result end -->
+
+### Opening a Database
+
+`JSONLiteDB("data.db")` opens an existing database or creates it if needed. Use `memory()` for temporary data, `create()` when accidentally reusing an existing file would be unsafe, and `read_only()` when writes must be prevented.
+
+```python exe
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+with TemporaryDirectory() as tmpdir:
+    dbpath = Path(tmpdir) / "example.db"
+
+    created = JSONLiteDB.create(dbpath)
+    created.insert({"status": "saved"})
+    created.close()
+
+    readonly = JSONLiteDB.read_only(dbpath)
+    print(readonly.query_one())
+    readonly.close()
+```
+
+<!-- md-demo: result start. Do not edit; this block is overwritten. -->
+```
+{'status': 'saved'}
+```
+<!-- md-demo: result end -->
 ```python exe
 db = JSONLiteDB(":memory:")
 # more generally:
@@ -61,6 +87,11 @@ list(db)
  {'born': 1926, 'first': 'George', 'last': 'Martin', 'role': 'producer'}]
 ```
 <!-- md-demo: result end -->
+
+### Threading
+
+`JSONLiteDB` instances are not thread-safe and must not be shared between threads, even when SQLite's `check_same_thread` check is disabled. Create a separate instance in each thread using the same on-disk database path; SQLite will coordinate access between their separate connections. Because `":memory:"` databases belong to a single connection, they are not shared by this pattern.
+
 ### Simple Queries
 
 Let's do some simple queries. The default `query()` returns an iterator so we can wrap them in a list or `.all()`.

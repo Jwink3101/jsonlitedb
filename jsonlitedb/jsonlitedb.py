@@ -91,11 +91,17 @@ class JSONLiteDB:
     sqlite3.Error
         If SQLite cannot open the database.
 
+    Notes
+    -----
+    A `JSONLiteDB` instance and its underlying SQLite connection are not
+    thread-safe as a unit and should not be shared between threads. For
+    threaded applications, create one instance per thread using the same
+    on-disk database path and let SQLite coordinate the connections.
+
     Examples
     --------
     >>> db = JSONLiteDB(":memory:")
     >>> db = JSONLiteDB("my/database.db", table="Beatles")
-    >>> db = JSONLiteDB("data.db", check_same_thread=False)
 
     References
     ----------
@@ -1660,6 +1666,8 @@ class JSONLiteDB:
         >>> # from the original file-backed database.
         >>> db = JSONLiteDB("mydb.db")
         >>> db.backup(":memory:", reopen=True)
+        ':memory:'
+        >>> db
         JSONLiteDB(':memory:')
 
 

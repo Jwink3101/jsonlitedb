@@ -17,6 +17,7 @@
 - `python -m pip install -e .` installs the project in editable mode for local development.
 - `python -m jsonlitedb` runs the CLI, and the `jsonlitedb` console script is available after install.
 
+
 ## Development and Publishing Workflow
 
 - Development happens in this private repo.
@@ -33,14 +34,23 @@
 - Use descriptive, lowercase function names and `CapWords` for classes (`JSONLiteDB`, `QueryResult`).
 - Prefer explicit keyword arguments for query helpers, e.g. `db.query(first="George", _orderby="born")`.
 - For public functions and methods, prefer NumPy style docstrings.
-- Markdown should have a blank new line after headings.
+
+## Writing and Markdown
+
+For all Markdown files:
+
+- Do not use hard line breaks.
+- Ensure there is always a blank line after a section header.
+- Prefer `-` to `*` for itemize but also prefer consistency with the rest of the document or block.
+- Prefer to increase numering for enumerated items unless it is inconsistent with the rest of the block.
+- Never use full filesystem paths to cross-reference docs. Always prefer them to be relative links.
 
 ## Testing Guidelines
 
 - Tests use `pytest` with coverage reporting.
 - Name tests `test_*.py` and functions `test_*` (see `tests/test_jsonlitedb.py`).
-- Aim to keep coverage high; the README advertises 100% coverage.
 - When adding features, include both positive and failure-path tests (e.g., `pytest.raises`).
+- 100% test coverage must be maintained! Use ``# pragma: no cover` only for provably unreachable or non-runtime code, never to avoid writing a difficult test, and always include a specific justification.
 
 ## Commit & Pull Request Guidelines
 

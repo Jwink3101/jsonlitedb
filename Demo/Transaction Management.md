@@ -359,3 +359,89 @@ DEBUG:jsonlitedb.jsonlitedb-sql:SELECT rowid, data FROM items
 DEBUG:jsonlitedb.jsonlitedb-sql:SELECT COUNT(rowid) FROM items
 ```
 <!-- md-demo: result end -->
+
+## Updates
+
+An outer context keeps repeated `update()` calls in one transaction. `update_many()` also uses one transaction, but it materializes its input before opening that transaction. Thus, the loop streams rows and executes updates individually, while `update_many()` prepares all rows first and then makes one `executemany()` call:
+
+```python exe
+logging.getLogger("jsonlitedb.jsonlitedb-sql").disabled = True
+logging.getLogger("jsonlitedb.jsonlitedb").disabled = True
+
+def trace_transaction(statement):
+    command = statement.split(maxsplit=1)[0]
+    if command in {"BEGIN", "COMMIT"}:
+        print(command)
+
+loop_db = JSONLiteDB(":memory:")
+loop_db.insertmany([{"id": 1}, {"id": 2}])
+loop_db.db.set_trace_callback(trace_transaction)
+
+print("update() loop")
+with loop_db:
+    for row in loop_db:
+        row["new"] = "val"
+        loop_db.update(row)
+        print(f"updated {row['id']}; in transaction: {loop_db.db.in_transaction}")
+print(f"after block: {loop_db.db.in_transaction}")
+```
+
+<!-- md-demo: result start. Do not edit; this block is overwritten. -->
+```
+update() loop
+BEGIN
+updated 1; in transaction: True
+updated 2; in transaction: True
+COMMIT
+after block: False
+```
+<!-- md-demo: result end -->
+For `map()`, the function must return the modified row; without `return row`, `update_many()` receives `None` and raises `MissingRowIDError`. Its messages appear before `BEGIN`, showing when the iterable is materialized:
+
+```python exe
+many_db = JSONLiteDB(":memory:")
+many_db.insertmany([{"id": 1}, {"id": 2}])
+many_db.db.set_trace_callback(trace_transaction)
+
+def add_value(row):
+    row["new"] = "val"
+    print(f"prepared {row['id']}")
+    return row
+
+print("update_many()")
+many_db.update_many(map(add_value, many_db))
+```
+
+<!-- md-demo: result start. Do not edit; this block is overwritten. -->
+```
+update_many()
+prepared 1
+prepared 2
+BEGIN
+COMMIT
+```
+<!-- md-demo: result end -->
+## Rollback on Error
+
+The context manager is also atomic. If an exception escapes the block, SQLite rolls back every change made inside it:
+
+```python exe
+db.db.set_trace_callback(None)  # Keep the output focused on rollback behavior.
+count_before = db.count()
+try:
+    with db:
+        db.insert({"status": "this will be rolled back"})
+        raise RuntimeError("stop the transaction")
+except RuntimeError as error:
+    print(error)
+
+print(f"{db.count() = }")
+print(f"{count_before = }")
+```
+<!-- md-demo: result start. Do not edit; this block is overwritten. -->
+```
+stop the transaction
+db.count() = 4
+count_before = 4
+```
+<!-- md-demo: result end -->

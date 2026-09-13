@@ -2,6 +2,14 @@
 
 Newest on top
 
+## NEXT
+
+- Cleaned, refreshed, and added demos.
+
+Minor:
+
+- Fixed docstring for backup() method.
+
 ## 0.5.4 (2026-07-19)
 
 * Adds `wal-checkpoint` CLI
