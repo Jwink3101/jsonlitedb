@@ -2,8 +2,10 @@
 
 Newest on top
 
-## NEXT
+## 0.6.0 (2026-10-29)
 
+- Added `_raw=True` to accept JSON strings on inserts, updates, and patches, and return JSON strings on reads. Defaults to `_raw=False`; legacy `_dump` and `_load` override it when non-`None`.
+- Added `load_json()` for explicit full JSON loading from paths or file-like objects. `load_jsonl()` (and its `import_jsonl` alias) still detects `.json` filenames, but now emits a `DeprecationWarning` directing callers to `load_json()`; other inputs retain their existing JSON Lines behavior.
 - Cleaned, refreshed, and added demos.
 
 Minor:

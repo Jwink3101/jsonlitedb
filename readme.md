@@ -47,7 +47,7 @@ print(f"{jsonlitedb.__version__ = }")
 
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
 ```
-jsonlitedb.__version__ = '0.5.4'
+jsonlitedb.__version__ = '0.6.0'
 ```
 <!-- md-demo: result end -->
 
@@ -540,7 +540,7 @@ You can mix and match index or attribute for keys. The following are all **ident
 
 ## Command Line Tools
 
-JSONLiteDB also installs a tool called "jsonlitedb" that makes it easy to read JSONL and JSON files into a database. This is useful for converting existing databases or appending data. The same workflow is available in the API via `db.import_jsonl(...)` and `db.export_jsonl(...)`.
+JSONLiteDB also installs a tool called "jsonlitedb" that makes it easy to read JSONL and JSON files into a database. This is useful for converting existing databases or appending data. In the API, use `db.load_json(...)` for full JSON, `db.load_jsonl(...)` (also available as `db.import_jsonl(...)`) for JSON Lines, and `db.export_jsonl(...)` to export. Both loading methods accept paths or file-like objects and leave caller-provided objects open. Passing a `.json` filename to `load_jsonl()` still loads full JSON for compatibility, but emits a `DeprecationWarning`; use `load_json()` instead.
 
 `insert` and `import` are the same command behavior for file/stdin input.
 `insert` keeps legacy positional file support for compatibility; `import` is

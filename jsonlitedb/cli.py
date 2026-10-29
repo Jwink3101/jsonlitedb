@@ -662,7 +662,7 @@ def cli():
             lines = (line for line in lines if line not in "[]")
             lines = (line.rstrip(",") for line in lines)
             try:
-                db.insertmany(lines, _dump=False, duplicates=args.duplicates)
+                db.insertmany(lines, _raw=True, duplicates=args.duplicates)
             except sqlite3.IntegrityError as exc:
                 _raise_cli_integrity_error(exc, command="insert")
 
@@ -715,7 +715,7 @@ def cli():
                 for line in db.db.iterdump():
                     fp.write(line + "\n")
             else:
-                for line in db.items(_load=False):
+                for line in db.items(_raw=True):
                     fp.write(line + "\n")
         finally:
             fp.close()

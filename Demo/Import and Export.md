@@ -5,7 +5,7 @@ setup: |
 
 # Importing and Exporting Data
 
-JSONLiteDB can exchange data with JSON Lines files through `export_jsonl()` and `import_jsonl()`. The latter is an alias for `load_jsonl()` and also reads ordinary `.json` files.
+JSONLiteDB can exchange data with JSON Lines files through `export_jsonl()` and `import_jsonl()`. The latter is an alias for `load_jsonl()`. Use `load_json()` for a complete JSON document or array of documents.
 
 ```python exe
 import json
@@ -60,7 +60,7 @@ restored.query(_orderby="id").all()
 <!-- md-demo: result end -->
 ## Import Regular JSON
 
-A file whose name ends in `.json` can contain either one document or an array of documents:
+`load_json()` accepts a path or file-like object containing either one document or an array of documents:
 
 ```python exe
 json_path = data_dir / "items.json"
@@ -74,13 +74,50 @@ json_path.write_text(
 )
 
 from_json = JSONLiteDB.memory()
-from_json.import_jsonl(json_path)
+from_json.load_json(json_path)
 from_json.query(_orderby="id").all()
 ```
 
 <!-- md-demo: result start. Do not edit; this block is overwritten. -->
 ```
 [{'id': 3, 'name': 'gamma'}, {'id': 4, 'name': 'delta'}]
+```
+<!-- md-demo: result end -->
+## Work with JSON Strings
+
+By default, writes encode Python objects as JSON and reads decode JSON into Python objects. Use `_raw=True` when supplying or retrieving JSON strings. SQLite still processes the JSON, so formatting may change. Raw results do not carry a `rowid` attribute; supply the rowid explicitly when updating them.
+
+```python exe
+raw_db = JSONLiteDB.memory()
+raw_db.insert('{"id":1,"name":"alpha"}', _raw=True)
+raw_db.insertmany(['{"id":2,"name":"beta"}'], _raw=True)
+
+print(raw_db.query_one(id=1))
+print(raw_db.query_one(id=1, _raw=True))
+```
+
+<!-- md-demo: result start. Do not edit; this block is overwritten. -->
+```
+{'id': 1, 'name': 'alpha'}
+{"id":1,"name":"alpha"}
+```
+<!-- md-demo: result end -->
+`_raw=True` also works with `items()`, `get_by_rowid()`, `update()`, `update_many()`, and `patch()`:
+
+```python exe
+rowid = raw_db.query_one(id=1).rowid
+raw_db.update('{"id":1,"name":"updated"}', rowid=rowid, _raw=True)
+raw_db.update_many([('{"id":2,"name":"second"}', 2)], _raw=True)
+raw_db.patch('{"active":true}', id=1, _raw=True)
+print(raw_db.get_by_rowid(rowid, _raw=True))
+print(list(raw_db.items(_raw=True)))
+raw_db.close()
+```
+
+<!-- md-demo: result start. Do not edit; this block is overwritten. -->
+```
+{"id":1,"name":"updated","active":true}
+['{"id":1,"name":"updated","active":true}', '{"id":2,"name":"second"}']
 ```
 <!-- md-demo: result end -->
 ## Import a File-Like Object

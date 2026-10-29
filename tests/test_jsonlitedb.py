@@ -8,6 +8,7 @@ import os
 import re
 import sqlite3
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -1018,13 +1019,15 @@ def test_JSONLiteDB_import_export_jsonl(tmp_path):
     json_path = tmp_path / "data.json"
     json_path.write_text(json.dumps(items))
     db3 = JSONLiteDB(":memory:")
-    db3.import_jsonl(json_path)
+    with pytest.warns(DeprecationWarning, match=r"Use load_json\(\) instead"):
+        db3.import_jsonl(json_path)
     assert list(db3) == items
 
     json_single_path = tmp_path / "single.json"
     json_single_path.write_text(json.dumps({"a": 10}))
     db4 = JSONLiteDB(":memory:")
-    db4.import_jsonl(json_single_path)
+    with pytest.warns(DeprecationWarning, match=r"Use load_json\(\) instead"):
+        db4.import_jsonl(json_single_path)
     assert list(db4) == [{"a": 10}]
 
 
@@ -1042,12 +1045,98 @@ def test_JSONLiteDB_load_jsonl_file_objects_and_paths(tmp_path):
     json_path.write_text(json.dumps(items))
     db2 = JSONLiteDB(":memory:")
     with open(json_path, "rt") as fp:
-        db2.load_jsonl(fp)
+        with pytest.warns(DeprecationWarning) as caught:
+            db2.load_jsonl(fp)
+        assert caught[0].filename == __file__
+        assert not fp.closed
     assert list(db2) == items
 
     db3 = JSONLiteDB(":memory:")
     with pytest.raises(Exception):
         db3.load_jsonl(123)
+
+
+@pytest.mark.parametrize("data", [{"a": 1}, [{"a": 1}, {"a": 2}], []])
+@pytest.mark.parametrize("source_kind", ["path", "str", "file", "stream"])
+def test_JSONLiteDB_load_json(tmp_path, data, source_kind):
+    # The explicit method ignores extensions, including on named streams.
+    path = tmp_path / "data.jsonl.gz"
+    path.write_text(json.dumps(data))
+    db = JSONLiteDB(":memory:")
+    with contextlib.ExitStack() as stack:
+        source = {
+            "path": lambda: path,
+            "str": lambda: str(path),
+            "file": lambda: stack.enter_context(path.open()),
+            "stream": lambda: stack.enter_context(io.StringIO(json.dumps(data))),
+        }[source_kind]()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            db.load_json(source)
+        assert not caught
+        if hasattr(source, "read"):
+            assert not source.closed
+    assert list(db) == (data if isinstance(data, list) else [data])
+
+
+@pytest.mark.parametrize("as_list", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("duplicates", [False, True, "replace", "ignore"])
+def test_JSONLiteDB_load_json_duplicates(tmp_path, as_list, legacy, duplicates):
+    db = JSONLiteDB(":memory:")
+    db.create_index("a", unique=True)
+    db.insert({"a": 1, "value": "old"})
+    item = {"a": 1, "value": "new"}
+    path = tmp_path / "data.JSON"
+    path.write_text(json.dumps([item] if as_list else item))
+    load = db.load_jsonl if legacy else db.load_json
+    with contextlib.ExitStack() as stack:
+        if legacy:
+            stack.enter_context(pytest.warns(DeprecationWarning))
+        if duplicates is False:
+            stack.enter_context(pytest.raises(sqlite3.IntegrityError))
+        load(path, duplicates=duplicates)
+    expected = "new" if duplicates in (True, "replace") else "old"
+    assert list(db) == [{"a": 1, "value": expected}]
+
+
+@pytest.mark.parametrize("owned", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("payload", ['{"a": 1}', "invalid JSON"])
+def test_JSONLiteDB_load_json_file_lifecycle(monkeypatch, owned, legacy, payload):
+    stream = io.StringIO(payload)
+    stream.name = "data.json"
+    monkeypatch.setattr(core, "open", lambda *args: stream, raising=False)
+    db = JSONLiteDB(":memory:")
+    load = db.load_jsonl if legacy else db.load_json
+    with contextlib.ExitStack() as stack:
+        if legacy:
+            stack.enter_context(pytest.warns(DeprecationWarning))
+        if payload == "invalid JSON":
+            stack.enter_context(pytest.raises(json.JSONDecodeError))
+        load("data.json" if owned else stream)
+    assert stream.closed == owned
+    stream.close()
+
+
+def test_JSONLiteDB_load_json_missing_path(tmp_path):
+    db = JSONLiteDB(":memory:")
+    with pytest.raises(FileNotFoundError):
+        db.load_json(tmp_path / "missing.json")
+
+
+@pytest.mark.parametrize("named", [False, True])
+def test_JSONLiteDB_load_jsonl_stream_no_warning(named):
+    db = JSONLiteDB(":memory:")
+    with io.StringIO('{"a": 1}\n\n{"a": 2}\n') as stream:
+        if named:
+            stream.name = "data.jsonl"
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            db.load_jsonl(stream)
+        assert not caught
+        assert not stream.closed
+    assert list(db) == [{"a": 1}, {"a": 2}]
 
 
 def test_Query():
@@ -2230,3 +2319,120 @@ def test_non_dicts():
         "ix_items_c3e97dd6_UNIQUE": ["$"],
         "ix_items_ef1046ca": ["$[1]"],
     }
+
+
+@pytest.mark.parametrize(
+    "method", ["insert", "insertmany", "update", "update_many", "patch"]
+)
+@pytest.mark.parametrize(
+    "options, raw",
+    [
+        ({}, False),
+        ({"_dump": False}, True),
+        ({"_dump": True}, False),
+        ({"_raw": True, "_dump": None}, True),
+        ({"_raw": False, "_dump": None}, False),
+        ({"_raw": True}, True),
+        ({"_raw": False}, False),
+        ({"_raw": True, "_dump": True}, False),
+        ({"_raw": False, "_dump": False}, True),
+    ],
+)
+def test_raw_writes_and_compatibility(method, options, raw):
+    with JSONLiteDB(":memory:") as db:
+        document = {"name": "George", "tags": ["guitar", "vocals"]}
+        item = json.dumps(document) if raw else document
+        if method in {"update", "update_many", "patch"}:
+            db.insert({"name": "Paul"})
+        if method == "insertmany":
+            db.insertmany(iter([item]), **options)
+        elif method == "update":
+            db.update(item, rowid=1, **options)
+        elif method == "update_many":
+            db.update_many(iter([(item, 1)]), **options)
+        else:
+            getattr(db, method)(item, **options)
+        assert list(db) == [document]
+
+
+@pytest.mark.parametrize(
+    "method",
+    ["query", "query_one", "items", "get_by_rowid", "query_by_path_exists", "result"],
+)
+@pytest.mark.parametrize(
+    "options, raw",
+    [
+        ({}, False),
+        ({"_load": False}, True),
+        ({"_load": True}, False),
+        ({"_raw": True, "_load": None}, True),
+        ({"_raw": False, "_load": None}, False),
+        ({"_raw": True}, True),
+        ({"_raw": False}, False),
+        ({"_raw": True, "_load": True}, False),
+        ({"_raw": False, "_load": False}, True),
+    ],
+)
+def test_raw_reads_and_compatibility(method, options, raw):
+    with JSONLiteDB(":memory:") as db:
+        document = {"name": "George"}
+        db.insert(document)
+        if method == "query_by_path_exists":
+            item = db.query_by_path_exists(db.Q.name, **options).one()
+        elif method == "get_by_rowid":
+            item = db.get_by_rowid(1, **options)
+            assert db.get_by_rowid(99, **options) is None
+        elif method == "query_one":
+            item = db.query_one(name="George", **options)
+        elif method == "result":
+            cursor = db.execute(f"SELECT rowid, data FROM {db.table}")
+            item = jsonlitedb.QueryResult(cursor, **options).one()
+        else:
+            item = getattr(db, method)(**options).one()
+        if raw:
+            assert isinstance(item, str)
+            assert json.loads(item) == document
+            assert not hasattr(item, "rowid")
+        else:
+            assert item == document
+            assert item.rowid == 1
+
+
+def test_raw_positional_compatibility():
+    with JSONLiteDB(":memory:") as db:
+        db.insertmany(['{"name":"George"}'], False, False)
+        db.update_many([('{"name":"Paul"}', 1)], False, False)
+        assert json.loads(db.items(False).one()) == {"name": "Paul"}
+        assert json.loads(db.query_by_path_exists(db.Q.name, False, "name").one()) == {
+            "name": "Paul"
+        }
+        cursor = db.execute(f"SELECT rowid, data FROM {db.table}")
+        assert json.loads(jsonlitedb.QueryResult(cursor, False).one()) == {
+            "name": "Paul"
+        }
+
+
+@pytest.mark.parametrize(
+    "method", ["insert", "insertmany", "update", "update_many", "patch"]
+)
+def test_raw_invalid_json(method):
+    with JSONLiteDB(":memory:") as db:
+        db.insert({"name": "George"})
+        with pytest.raises(sqlite3.OperationalError, match="malformed JSON"):
+            if method == "insertmany":
+                db.insertmany(["invalid JSON"], _raw=True)
+            elif method == "update":
+                db.update("invalid JSON", rowid=1, _raw=True)
+            elif method == "update_many":
+                db.update_many([("invalid JSON", 1)], _raw=True)
+            else:
+                getattr(db, method)("invalid JSON", _raw=True)
+        assert list(db) == [{"name": "George"}]
+
+
+@pytest.mark.parametrize("raw", [True, False])
+def test_render_query_accepts_raw_without_changing_sql(raw):
+    with JSONLiteDB(":memory:") as db:
+        condition = db.Q.name == "George"
+        expected = db.render_query(condition)
+        assert db.render_query(condition, _raw=raw, _load=False) == expected

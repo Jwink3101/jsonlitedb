@@ -10,6 +10,7 @@ import os
 import re
 import sqlite3
 import sys
+import warnings
 from collections import namedtuple
 from functools import partialmethod
 from pathlib import Path
@@ -18,7 +19,7 @@ from textwrap import dedent
 logger = logging.getLogger(__name__)
 sqllogger = logging.getLogger(__name__ + "-sql")
 
-__version__ = "0.5.4"
+__version__ = "0.6.0"
 
 __all__ = [
     "AssignedQueryError",
@@ -261,7 +262,7 @@ class JSONLiteDB:
         """
         return cls(":memory:", **kwargs)
 
-    def insert(self, *items, duplicates=False, _dump=True):
+    def insert(self, *items, duplicates=False, _dump=None, _raw=False):
         """
         Insert one or more JSON documents.
 
@@ -269,14 +270,17 @@ class JSONLiteDB:
         ----------
         *items : dict | str
             Documents to insert. Use dict/list objects by default, or pass JSON
-            strings with `_dump=False`.
+            strings with `_raw=True`.
         duplicates : bool | str, optional
             How to handle unique index conflicts:
             - False (default): raise an error on duplicates.
             - True or "replace": replace existing rows.
             - "ignore": skip rows that violate uniqueness.
-        _dump : bool, optional
-            If True (default), JSON-encode items before insert.
+        _raw : bool, optional
+            Accept JSON strings if True; encode Python objects if False (default).
+            SQLite still processes the JSON; formatting may change.
+        _dump : bool | None, optional
+            Legacy: when non-None, overrides `_raw` with `not _dump`.
 
         Raises
         ------
@@ -288,27 +292,31 @@ class JSONLiteDB:
         >>> db = JSONLiteDB(":memory:")
         >>> db.insert({"first": "John", "last": "Lennon"})
         >>> db.insert({"first": "Paul"}, duplicates="ignore")
+        >>> db.insert('{"first": "George"}', _raw=True)
 
         See Also
         --------
         insertmany
         """
-        return self.insertmany(items, duplicates=duplicates, _dump=_dump)
+        return self.insertmany(items, duplicates=duplicates, _dump=_dump, _raw=_raw)
 
     add = insert
 
-    def insertmany(self, items, duplicates=False, _dump=True):
+    def insertmany(self, items, duplicates=False, _dump=None, *, _raw=False):
         """
         Insert an iterable of documents.
 
         Parameters
         ----------
         items : iterable
-            Documents to insert (dicts/lists) or JSON strings if `_dump=False`.
+            Documents to insert (dicts/lists) or JSON strings if `_raw=True`.
         duplicates : bool | str, optional
             Duplicate handling for unique indexes: False, True/"replace", or "ignore".
-        _dump : bool, optional
-            JSON-encode items when True (default).
+        _raw : bool, optional
+            Accept JSON strings if True; encode Python objects if False (default).
+            SQLite still processes the JSON; formatting may change.
+        _dump : bool | None, optional
+            Legacy: when non-None, overrides `_raw` with `not _dump`.
 
         Raises
         ------
@@ -331,7 +339,9 @@ class JSONLiteDB:
             raise ValueError('Replace must be in {True, False, "replace", "ignore"}')
 
         items = listify(items)
-        if _dump:
+        if _dump is not None:
+            _raw = not _dump
+        if not _raw:
             ins = ([json.dumps(item, ensure_ascii=False)] for item in items)
         else:
             ins = ([item] for item in items)
@@ -344,9 +354,43 @@ class JSONLiteDB:
                 ins,
             )
 
+    def load_json(self, source, duplicates=False):
+        """
+        Load a JSON array of records or a single JSON record into the database.
+
+        Parameters
+        ----------
+        source : str | Path | file-like
+            Input path or readable file-like object. Parsed as full JSON
+            regardless of the filename. Caller-provided objects are left open.
+        duplicates : bool | str, optional
+            Duplicate handling for unique indexes: False, True/"replace", or
+            "ignore".
+
+        Examples
+        --------
+        >>> db.load_json("data.json")
+        >>> db.load_json("data.json", duplicates="ignore")
+        """
+        if hasattr(source, "read"):
+            close_after = False
+        else:
+            source = open(source, "rt")
+            close_after = True
+
+        try:
+            data = json.load(source)
+            if isinstance(data, list):
+                self.insertmany(data, duplicates=duplicates)
+            else:
+                self.insert(data, duplicates=duplicates)
+        finally:
+            if close_after:
+                source.close()
+
     def load_jsonl(self, source, duplicates=False):
         """
-        Load JSON/JSONL data into the database.
+        Load JSON Lines data into the database.
 
         Parameters
         ----------
@@ -362,13 +406,18 @@ class JSONLiteDB:
 
         Notes
         -----
-        JSON Lines insertion uses ``_dump=False`` internally, so each line is
+        Detecting full JSON from a ``.json`` filename is deprecated and emits
+        a ``DeprecationWarning``. Use :meth:`load_json` for full JSON instead.
+        A future release will always interpret input as JSON Lines.
+        Caller-provided file-like objects are left open.
+
+        JSON Lines insertion uses ``_raw=True`` internally, so each line is
         treated as pre-serialized JSON and inserted via ``JSON(?)`` in SQLite.
 
         Examples
         --------
         >>> db.load_jsonl("data.jsonl")
-        >>> db.load_jsonl("data.json", duplicates="ignore")
+        >>> db.load_jsonl("data.jsonl", duplicates="ignore")
         """
         if hasattr(source, "read"):
             close_after = False
@@ -379,18 +428,21 @@ class JSONLiteDB:
         try:
             name = str(getattr(source, "name", "") or "").lower()
             if name.endswith(".json"):
-                data = json.load(source)
-                if isinstance(data, list):
-                    self.insertmany(data, duplicates=duplicates)
-                else:
-                    self.insert(data, duplicates=duplicates)
+                warnings.warn(
+                    "Loading full JSON through load_jsonl() is deprecated. "
+                    "Use load_json() instead. A future release will always "
+                    "interpret load_jsonl() input as JSON Lines.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
+                self.load_json(source, duplicates=duplicates)
                 return
 
             lines = (line.strip() for line in source)
             # Handle pretty-printed line-oriented json or stream
             lines = (line for line in lines if line and line not in "[]")
             lines = (line.rstrip(",") for line in lines)
-            self.insertmany(lines, _dump=False, duplicates=duplicates)
+            self.insertmany(lines, _raw=True, duplicates=duplicates)
         finally:
             if close_after:
                 source.close()
@@ -414,7 +466,7 @@ class JSONLiteDB:
         >>> db.export_jsonl("out.jsonl", mode="a")
         """
         with open(path, mode=f"{mode}t") as fp:
-            for line in self.items(_load=False):
+            for line in self.items(_raw=True):
                 fp.write(line + "\n")
 
     def query(self, *query_args, **query_kwargs):
@@ -431,9 +483,11 @@ class JSONLiteDB:
 
         Other Parameters
         ----------------
-        _load : bool, optional
-            If True (default), return decoded JSON (DBDict/DBList). If False,
-            return raw JSON strings.
+        _raw : bool, optional
+            Return JSON strings if True; decoded Python objects if False (default).
+            Raw strings do not carry a `rowid` attribute.
+        _load : bool | None, optional
+            Legacy: when non-None, overrides `_raw` with `not _load`.
         _limit : int, optional
             Add `LIMIT N` to the SQL query. The return type is still an iterator.
         _orderby : str | tuple | Query | list, optional
@@ -443,11 +497,12 @@ class JSONLiteDB:
         -------
         QueryResult
             Iterator over matching rows. Each row is a DBDict/DBList with a
-            `rowid` attribute when `_load=True`.
+            `rowid` attribute when `_raw=False`.
 
         Examples
         --------
         >>> db.query(first="John", last="Lennon")
+        >>> db.query(first="John", _raw=True)  # Return JSON strings
         >>> db.query({"birthdate": 1940})
         >>> db.query((db.Q.first == "Paul") | (db.Q.first == "John"))
         >>> db.query((db.Q.first % "Geo%") & (db.Q.birthdate <= 1943))
@@ -533,11 +588,12 @@ class JSONLiteDB:
         Use `db.Q.rowid_` to sort by the SQLite rowid without treating it as a
         JSON document key.
         """
-        _load = query_kwargs.pop("_load", True)
+        _load = query_kwargs.pop("_load", None)
+        _raw = query_kwargs.pop("_raw", False)
         sql, qvals = self.render_query(*query_args, **query_kwargs)
         res = self.execute(sql, qvals)
 
-        return QueryResult(res, _load=_load)
+        return QueryResult(res, _load=_load, _raw=_raw)
 
     __call__ = search = query
 
@@ -558,10 +614,11 @@ class JSONLiteDB:
 
         Notes
         -----
-        `_load` is accepted for API compatibility with `query()` but does not
-        affect the generated SQL.
+        `_raw` and the compatibility alias `_load` are accepted as in
+        `query()` but do not affect the generated SQL.
         """
-        query_kwargs.pop("_load", True)
+        query_kwargs.pop("_load", None)
+        query_kwargs.pop("_raw", False)
         _limit = query_kwargs.pop("_limit", None)
         _orderby = query_kwargs.pop("_orderby", None)
 
@@ -656,7 +713,7 @@ class JSONLiteDB:
         ).fetchone()
         return res[0]
 
-    def query_by_path_exists(self, path, _load=True, _orderby=None):
+    def query_by_path_exists(self, path, _load=None, _orderby=None, *, _raw=False):
         """
         Return documents that contain a given JSON path.
 
@@ -672,8 +729,11 @@ class JSONLiteDB:
         ----------
         path : str | tuple | Query
             JSON path to check for existence.
-        _load : bool, optional
-            Load JSON objects (default True).
+        _raw : bool, optional
+            Return JSON strings if True; decoded Python objects if False (default).
+            Raw strings do not carry a `rowid` attribute.
+        _load : bool | None, optional
+            Legacy: when non-None, overrides `_raw` with `not _load`.
         _orderby : optional
             Ordering specification. See `query()`.
 
@@ -722,7 +782,7 @@ class JSONLiteDB:
             """,
             (parent, child),
         )
-        return QueryResult(res, _load=_load)
+        return QueryResult(res, _load=_load, _raw=_raw)
 
     def count_by_path_exists(self, path):
         """
@@ -974,7 +1034,7 @@ class JSONLiteDB:
 
         return self.remove_by_rowid(rowid)
 
-    def get_by_rowid(self, rowid, *, _load=True):
+    def get_by_rowid(self, rowid, *, _load=None, _raw=False):
         """
         Retrieve a document by rowid.
 
@@ -982,8 +1042,11 @@ class JSONLiteDB:
         ----------
         rowid : int
             SQLite rowid to fetch.
-        _load : bool, optional
-            Return decoded JSON (default True) or raw JSON string.
+        _raw : bool, optional
+            Return JSON strings if True; decoded Python objects if False (default).
+            Raw strings do not carry a `rowid` attribute.
+        _load : bool | None, optional
+            Legacy: when non-None, overrides `_raw` with `not _load`.
 
         Returns
         -------
@@ -1011,7 +1074,9 @@ class JSONLiteDB:
         if not row:
             return
 
-        if not _load:
+        if _load is not None:
+            _raw = not _load
+        if _raw:
             return row["data"]
 
         item = json.loads(row["data"])
@@ -1058,14 +1123,17 @@ class JSONLiteDB:
             raise IndexError(f"{rowid = } not found")
         return item
 
-    def items(self, _load=True):
+    def items(self, _load=None, *, _raw=False):
         """
         Iterate over all documents (unordered).
 
         Parameters
         ----------
-        _load : bool, optional
-            Return decoded JSON (default True) or raw JSON strings.
+        _raw : bool, optional
+            Return JSON strings if True; decoded Python objects if False (default).
+            Raw strings do not carry a `rowid` attribute.
+        _load : bool | None, optional
+            Legacy: when non-None, overrides `_raw` with `not _load`.
 
         Returns
         -------
@@ -1080,18 +1148,18 @@ class JSONLiteDB:
         """
         res = self.execute(f"SELECT rowid, data FROM {self.table}")
 
-        return QueryResult(res, _load=_load)
+        return QueryResult(res, _load=_load, _raw=_raw)
 
     __iter__ = items
 
-    def update(self, *items, rowid=None, duplicates=False, _dump=True):
+    def update(self, *items, rowid=None, duplicates=False, _dump=None, _raw=False):
         """
         Replace stored documents by rowid.
 
         Parameters
         ----------
         *items : dict | str | tuple
-            Replacement documents or JSON strings if `_dump=False`. Multiple
+            Replacement documents or JSON strings if `_raw=True`. Multiple
             items may be passed positionally. Each item must carry a `rowid`
             attribute or be a tuple of ``(item, rowid)``.
         rowid : int, optional
@@ -1099,8 +1167,11 @@ class JSONLiteDB:
             when present. Not allowed when multiple items are provided.
         duplicates : bool | str, optional
             Handling for unique index conflicts (False, True/"replace", "ignore").
-        _dump : bool, optional
-            JSON-encode items when True (default).
+        _raw : bool, optional
+            Accept JSON strings if True; encode Python objects if False (default).
+            SQLite still processes the JSON; formatting may change.
+        _dump : bool | None, optional
+            Legacy: when non-None, overrides `_raw` with `not _dump`.
 
         Raises
         ------
@@ -1140,7 +1211,9 @@ class JSONLiteDB:
                 raise MissingRowIDError("Must specify rowid if it can't be infered")
             updates.append((item, item_rowid))
 
-        if _dump:
+        if _dump is not None:
+            _raw = not _dump
+        if not _raw:
             updates = [
                 (json.dumps(item, ensure_ascii=False), item_rowid)
                 for item, item_rowid in updates
@@ -1167,7 +1240,7 @@ class JSONLiteDB:
                 updates,
             )
 
-    def update_many(self, items, duplicates=False, _dump=True):
+    def update_many(self, items, duplicates=False, _dump=None, *, _raw=False):
         """
         Replace stored documents by rowid in bulk.
 
@@ -1178,8 +1251,11 @@ class JSONLiteDB:
             ``rowid`` attribute, or a tuple of ``(item, rowid)``.
         duplicates : bool | str, optional
             Handling for unique index conflicts (False, True/"replace", "ignore").
-        _dump : bool, optional
-            JSON-encode items when True (default).
+        _raw : bool, optional
+            Accept JSON strings if True; encode Python objects if False (default).
+            SQLite still processes the JSON; formatting may change.
+        _dump : bool | None, optional
+            Legacy: when non-None, overrides `_raw` with `not _dump`.
 
         Raises
         ------
@@ -1194,7 +1270,9 @@ class JSONLiteDB:
         with ``with db:`` and call ``update()`` to batch changes in a single
         transaction.
         """
-        return self.update(*listify(items), duplicates=duplicates, _dump=_dump)
+        return self.update(
+            *listify(items), duplicates=duplicates, _dump=_dump, _raw=_raw
+        )
 
     def patch(self, patchitem, *query_args, **query_kwargs):
         """
@@ -1207,8 +1285,11 @@ class JSONLiteDB:
         *query_args, **query_kwargs
             Selection criteria (same as `query()`). If omitted, all rows
             are patched.
-        _dump : bool, optional
-            JSON-encode `patchitem` when True (default).
+        _raw : bool, optional
+            Accept JSON strings if True; encode Python objects if False (default).
+            SQLite still processes the JSON; formatting may change.
+        _dump : bool | None, optional
+            Legacy: when non-None, overrides `_raw` with `not _dump`.
 
         Examples
         --------
@@ -1227,11 +1308,14 @@ class JSONLiteDB:
         https://www.sqlite.org/json1.html#jpatch
         https://datatracker.ietf.org/doc/html/rfc7396
         """
-        _dump = query_kwargs.pop("_dump", True)
+        _dump = query_kwargs.pop("_dump", None)
+        _raw = query_kwargs.pop("_raw", False)
 
         qstr, qvals = JSONLiteDB._query2sql(*query_args, **query_kwargs)
 
-        if _dump:
+        if _dump is not None:
+            _raw = not _dump
+        if not _raw:
             patchitem = json.dumps(patchitem, ensure_ascii=False)
 
         with self:
@@ -1799,12 +1883,21 @@ class QueryResult:
     Iterator wrapper for query results.
 
     Returns decoded JSON objects by default (DBDict/DBList with `rowid`).
-    Use `_load=False` to iterate over raw JSON strings.
+    Use `_raw=True` to iterate over raw JSON strings without a `rowid` attribute.
+
+    Parameters
+    ----------
+    res : sqlite3.Cursor
+        Cursor containing `rowid` and `data` columns.
+    _raw : bool, optional
+        Return JSON strings if True; decoded Python objects if False (default).
+    _load : bool | None, optional
+        Legacy: when non-None, overrides `_raw` with `not _load`.
     """
 
-    def __init__(self, res, _load=True):
+    def __init__(self, res, _load=None, *, _raw=False):
         self.res = res
-        self._load = _load
+        self._load = not _raw if _load is None else _load
 
     def __iter__(self):
         return self
@@ -1816,7 +1909,7 @@ class QueryResult:
         Returns
         -------
         DBDict | DBList | object
-            Decoded JSON object/list (with `rowid`) when `_load=True`,
+            Decoded JSON object/list (with `rowid`) when `_raw=False`,
             otherwise a raw JSON string.
 
         Raises
@@ -1849,7 +1942,7 @@ class QueryResult:
         Returns
         -------
         DBDict | DBList | object | None
-            Next decoded item (or raw JSON string when `_load=False`), or
+            Next decoded item (or raw JSON string when `_raw=True`), or
             ``None`` when exhausted.
         """
         try:
@@ -1866,7 +1959,7 @@ class QueryResult:
         Returns
         -------
         list
-            List of decoded items (or raw JSON strings when `_load=False`).
+            List of decoded items (or raw JSON strings when `_raw=True`).
         """
         return list(self)
 
@@ -1882,7 +1975,7 @@ class QueryResult:
         Returns
         -------
         list
-            List of decoded items (or raw JSON strings when `_load=False`).
+            List of decoded items (or raw JSON strings when `_raw=True`).
         """
         if not size:
             size = self.res.arraysize
